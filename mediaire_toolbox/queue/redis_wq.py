@@ -1,5 +1,10 @@
-"""Work queue based on redis.
-   Adapted from https://kubernetes.io/docs/tasks/job/fine-parallel-processing-work-queue/rediswq.py  # noqa
+""" Work queue based on redis.
+
+References
+----------
+Adapted from
+    https://kubernetes.io/docs/tasks/job/fine-parallel-processing-work-queue/
+    https://kubernetes.io/examples/application/job/redis/rediswq.py
 """
 
 import redis
@@ -7,7 +12,6 @@ import uuid
 import hashlib
 import logging
 import time
-import sys
 
 logger = logging.getLogger(__name__)
 
@@ -71,16 +75,16 @@ class RedisWQ(object):
 # TODO: implement this
 #    def check_expired_leases(self):
 #        """Return to the work queueReturn True if the queue is empty,
-    # False otherwise."""
+#        False otherwise."""
 #        # Processing list should not be _too_ long since it is approximately
-    # as long
+#        # as long
 #        # as the number of active and recently active workers.
 #        processing = self._db.lrange(self._processing_q_key, 0, -1)
 #        for item in processing:
-#          # If the lease key is not present for an item (it expired or was 
+#          # If the lease key is not present for an item (it expired or was
 #          # never created because the client crashed before creating it)
 #          # then move the item back to the main queue so others can work on
-           # it.
+#          # it.
 #          if not self._lease_exists(item):
 #            TODO: transactionally move the key from processing queue to
 #            to main queue, while detecting if a new lease is created
@@ -89,7 +93,7 @@ class RedisWQ(object):
     def _itemkey(self, item):
         """Returns a string that uniquely identifies an item (bytes)."""
         return hashlib.sha224(item).hexdigest()
-    
+
     def _lease_exists(self, item):
         """True if a lease on 'item' exists."""
         return self._db.exists(self._lease_key_prefix + self._itemkey(item))
@@ -125,13 +129,14 @@ class RedisWQ(object):
         if timeunit == 'min':
             return 60
         if timeunit == 'hour':
-            return 60*60
+            return 60 * 60
         raise ValueError('Invalid timeunit {}'.format(timeunit))
 
     def _limit_rate(self, limit, timeunit):
-        """
-        Limits the rate of items leased in the queue. Counts the leases
-        at each timeunit, after the limit is reached, no more leases are allowed.
+        """Limits the rate of items leased in the queue.
+
+        Counts the leases at each timeunit, after the limit is reached, no more
+        leases are allowed.
 
         Parameters
         ----------
@@ -204,6 +209,7 @@ class RedisWQ(object):
             # for this item a later return it to the main queue.
             logger.info('Leasing item from queue {} with Limit {} per {}'
                         .format(self._main_q_key, limit, timeunit))
+            # TODO this could probably be solved more elegantly with pubsub
             while True:
                 if self._limit_rate(limit, timeunit):
                     break
@@ -258,7 +264,7 @@ class RedisWQ(object):
     @staticmethod
     def get_all_queues_from_config(appconfig: dict, redis_args: dict):
         queues = {
-            q_identifier: RedisWQ(q_key, **redis_args) 
+            q_identifier: RedisWQ(q_key, **redis_args)
             for q_identifier, q_key in appconfig['shared']['queues'].items()
         }
         return queues
@@ -275,8 +281,3 @@ class RedisWQ(object):
 # the processing q
 # have a leased_key. If not, these are expired leases and should be put back
 # into the main q
-
-# TODO: error handling, introduce error queue: when a known error
-# during processing occurs, put item in
-# error queue and remove it form processing queue (`complete()`).
-# Manually check error queue
