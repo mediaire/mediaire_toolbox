@@ -1,4 +1,4 @@
-""" Work queue based on redis.
+"""Work queue based on redis.
 
 References
 ----------
@@ -7,17 +7,20 @@ Adapted from
     https://kubernetes.io/examples/application/job/redis/rediswq.py
 """
 
-import redis
+from typing import Optional
 import uuid
 import hashlib
 import logging
 import time
 
+import redis
+
+
 logger = logging.getLogger(__name__)
 
 
 class RedisWQ(object):
-    """Simple Finite Work Queue with Redis Backend
+    """Simple Finite Work Queue with Redis Backend.
 
     This work queue is finite: as long as no more work is added
     after workers start, the workers can detect when the queue
@@ -28,15 +31,42 @@ class RedisWQ(object):
     This object is not intended to be used by multiple threads
     concurrently.
     """
-    def __init__(self, name, db=None, **redis_kwargs):
-        """The default connection parameters are:
-        host='localhost', port=6379, db=0
-
-        The work queue is identified by "name".  The library may create other
-        keys with "name" as a prefix.
+    def __init__(self,
+                 name: str,
+                 db: Optional[redis.client.Redis] = None,
+                 gpu_slots: int = -1,
+                 **redis_kwargs):
+        """
+        Parameters
+        ----------
+        name
+            The work queue is identified by `name`. The library may create
+            other keys with `name` as a prefix.
+        db
+            A custom redis database object. `decode_responses=True` _must_ be
+            set. If None is passed, a new redis connection will be created with
+            **redis_kwargs.
+        gpu_slots
+            Number of "memory slots" on the GPU that can be used by workers in
+            vertical scaling mode. Basically the number of workers that are
+            allowed to use the GPU in parallel (which is not necessarily the
+            number of workers allowed to use the CPU in parallel,
+            `envconfig.mdbrain_scale`). If -1 is passed, the slotting feature
+            will be bypassed altogether (corresponds to virtually infinite
+            slots).
+        **redis_kwargs
+            Additional parameters that will be passed to the
+            `redis.StrictRedis` constructor of the database object. The default
+            connection parameters are:
+                host='localhost', port=6379, db=0,
+            Because the implementation assumes that `decode_responses=True` is
+            set, this value will always override what has been set in
+            **redis_kwargs
         """
         if db is None:
-            self._db = redis.StrictRedis(**redis_kwargs)
+            # always set `decode_responses=True`, override `redis_kwargs
+            self._db = redis.StrictRedis(**{**redis_kwargs,
+                                            **{'decode_responses': True}})
         else:
             self._db = db
         # The session ID will uniquely identify this "worker".
@@ -50,6 +80,24 @@ class RedisWQ(object):
         self._error_messages_q_key = name + ":error_messages"
         self._lease_key_prefix = name + ":leased_by_session:"
         self._limit_key_prefix = name + ":limit:"
+
+        # TODO
+        # envconfig = md_commons.utils.read_yaml(md_commons.constants.ENVCONFIG_PATH)  # noqa: 501
+        # Vertical scaling is done by setting
+        # - `max_processing_studies`: number of Tasks processed in parallel
+        # - `mdbrain_scale`: number of worker images spun up
+        # but unfortunately, RedisWQ is imported by md_commons, so this would
+        # lead to a circular import. For now, use manual parameter.
+        # TODO document this in this method's docsting and in
+        # `confluence/mdbrain Configuration envconfig.yml`.
+        self._slots = gpu_slots
+        # NOTE slot keys are _not_ unique per session but shared across all
+        # sessions!
+        self._slot_key_prefix = 'slot:'
+        self._slot_request_key = 'slot_request'
+        if self._slots > 0:
+            self._slot_keys = set(self._slot_key_prefix + str(slot)
+                                  for slot in range(self._slots))
 
     def sessionID(self):
         """Return the ID for this session."""
@@ -72,23 +120,23 @@ class RedisWQ(object):
         """
         return self._main_qsize() == 0 and self._processing_qsize() == 0
 
-# TODO: implement this
-#    def check_expired_leases(self):
-#        """Return to the work queueReturn True if the queue is empty,
-#        False otherwise."""
-#        # Processing list should not be _too_ long since it is approximately
-#        # as long
-#        # as the number of active and recently active workers.
-#        processing = self._db.lrange(self._processing_q_key, 0, -1)
-#        for item in processing:
-#          # If the lease key is not present for an item (it expired or was
-#          # never created because the client crashed before creating it)
-#          # then move the item back to the main queue so others can work on
-#          # it.
-#          if not self._lease_exists(item):
-#            TODO: transactionally move the key from processing queue to
-#            to main queue, while detecting if a new lease is created
-#            or if either queue is modified.
+    # TODO: implement this
+    # def check_expired_leases(self):
+    #     """Return to the work queueReturn True if the queue is empty,
+    #     False otherwise."""
+    #     # Processing list should not be _too_ long since it is approximately
+    #     # as long
+    #     # as the number of active and recently active workers.
+    #     processing = self._db.lrange(self._processing_q_key, 0, -1)
+    #     for item in processing:
+    #       # If the lease key is not present for an item (it expired or was
+    #       # never created because the client crashed before creating it)
+    #       # then move the item back to the main queue so others can work on
+    #       # it.
+    #       if not self._lease_exists(item):
+    #           # TODO: transactionally move the key from processing queue to
+    #           # to main queue, while detecting if a new lease is created
+    #           # or if either queue is modified.
 
     def _itemkey(self, item):
         """Returns a string that uniquely identifies an item (bytes)."""
@@ -166,13 +214,125 @@ class RedisWQ(object):
         pipe.execute()
         return True
 
+    def _find_free_slot(self):
+        """Return key to free GPU slot if available, None otherwise."""
+        blocked_slots = set(self._db.keys(self._slot_key_prefix + '*'))
+        free_slots = self._slot_keys - blocked_slots
+        try:
+            return free_slots.pop()
+        except KeyError:
+            return None
+
+    def _lock_slot(self, slot_key: Optional[str], lease_secs: int):
+        """Lock slot `slot_key` to current session.
+
+        A slot taken if its redis key from :var:`self._slot_keys` that is set
+        to the curr
+
+        Parameters
+        ----------
+        slot_key
+            redis key for the slot to lock
+        lease_secs
+            Number of seconds to lock the slot for. This should be the maximum
+            time a worker is allowed to take to process a Task before we assume
+            it died or hung up and we release the slot.
+
+        Raises
+        ------
+        RuntimeError
+            If unable to lock slot (slot might not exist or not be available).
+        """
+        done = self._db.set(slot_key, self.sessionID(), nx=True, ex=lease_secs)
+        if not done:
+            raise RuntimeError("Slot `{}` could not be locked."
+                               .format(slot_key))
+
+    # TODO (configurable) default timeout? How to choose timeouts?
+    # maybe timeouts should be reset every time the queue gets popped?
+    # or only for the first item?
+    def _request_slot(self, timeout: int, task_id: str = ''):
+        """Enqueue a request to be eligible when a slot becomes available.
+
+        The request queue is a redis list. New requests are pushed in from the
+        left (head) in the form of session IDs. The right-most ID is allowed to
+        take a slot and pop itself off the request list. See
+        :meth:`_remove_slot_request()`.
+
+        To prevent a deadlock if a worker dies during waiting, an additional
+        key of the form `slot_request:{sessionID} -> {task_id}` is set with
+        with a `timeout`. When workers check the tail of the request, they
+        clean up expired requests. See :meth:`_cleanup_slot_requests()`
+
+        Parameters
+        ----------
+        timeout
+            The number of seconds after which the request should be discarded.
+            If the worker dies while waiting, the queue doesn't get locked up.
+        task_id
+            Value identifying the task the slot is reserved for. This usually
+            is :meth:`._itemkey()` of the `item` to be processed. Can be empty.
+        """
+        self._db.lpush(self._slot_request_key, self.sessionID())
+        # TODO should we do nx=True here and handle errors?
+        self._db.set(self._slot_request_key + ':' + self.sessionID(),
+                     task_id,
+                     ex=timeout)
+
+    # TODO implementation, detailed docs
+    def _remove_slot_request(self):
+        """Remove slot request from the request queue."""
+        raise NotImplementedError
+
+    # TODO implementation, detailed docs
+    def _cleanup_slot_requests(self):
+        """Cleanup expired slot requests from the request queue."""
+        raise NotImplementedError
+
+    def _wait_for_slot(self) -> str:
+        """Wait until a GPU slot is available, and lock it.
+
+        If no slot is available immediately, enqueue in request queue, wait
+        for slot freeing and clean up expired request entries.
+
+        This uses redis PubSub to wait blockingly instead of polling.
+
+        Returns
+        -------
+        str
+            redis key of the acquired slot
+        """
+        if self._slots < 0:
+            # slotting disabled
+            return self._slot_key_prefix + "0"
+
+        # TODO not implemented yet
+        return
+
+        # TODO make sure slot cannot be taken between find_free_lost and
+        # _lock_slot. maybe use transactions?
+        slot = self._find_free_slot()
+
+        while not slot:
+            try:
+                self._lock_slot(slot)
+            except RuntimeError:
+                # Use try/accept here instead of if slot/else in case the slot
+                # is locked by another worker between `_find_free_slot` and
+                # `_lock_slot`.
+                self._request_slot()
+
     # for now `lease_secs` is useless!
-    def lease(self, lease_secs=5, block=True, timeout=None,
-              limit=-1, timeunit='hour'):
+    def lease(self,
+              lease_secs=5,
+              block=True,
+              timeout=None,
+              limit=-1,
+              timeunit='hour'):
         """Begin working on an item the work queue.
-        Check if rate reached limit on work queue. If reached, wait until
-        next timeunit.
-        If not, then lease item.
+
+        Check if rate reached limit on work queue. If reached, wait until next
+        timeunit.  If not, then lease item.
 
         Parameters
         ----------
@@ -195,18 +355,22 @@ class RedisWQ(object):
         bytes
             Leased item in bytes.
         """
+
+        # first try to get an item from the queue (if block: wait for an item)
         if block:
+            # TODO redis>=6.2.0: use BLMOVE {} {} RIGHT LEFT
             item = self._db.brpoplpush(self._main_q_key,
-                                       self._processing_q_key, timeout=timeout)
+                                       self._processing_q_key,
+                                       timeout=timeout).encode('utf-8')
         else:
+            # TODO redis>=6.2.0: use LMOVE {} {} RIGHT LEFT
             item = self._db.rpoplpush(self._main_q_key, self._processing_q_key)
+
         if item:
-            # Record that we (this session id) are working on a key.  Expire
-            # that
-            # note after the lease timeout.
-            # Note: if we crash at this line of the program, then GC will
-            # see no lease
-            # for this item a later return it to the main queue.
+            # Check if rate limit for this queue type has been exceeded. If so,
+            # wait until next epoch.
+            # NOTE: if we crash at this line of the program, then GC will
+            # see no lease for this item a later return it to the main queue.
             logger.info('Leasing item from queue {} with Limit {} per {}'
                         .format(self._main_q_key, limit, timeunit))
             # TODO this could probably be solved more elegantly with pubsub
@@ -215,10 +379,18 @@ class RedisWQ(object):
                     break
                 sleeptime = 1.0
                 time.sleep(sleeptime)
+
+            # Only lease the item if a GPU slot is available, otherwise secure
+            # a spot in the `slot_request` queue.
+            self._wait_for_slot()
+
+            # Record that we (this session id) are working on a key. Expire
+            # that note after the lease timeout.
             itemkey = self._itemkey(item)
             logger.info('{} -> {}'.format(self._lease_key_prefix + itemkey,
                                           self._session))
-            self._db.setex(self._lease_key_prefix + itemkey, lease_secs,
+            self._db.setex(self._lease_key_prefix + itemkey,
+                           lease_secs,
                            self._session)
         return item
 
@@ -276,8 +448,6 @@ class RedisWQ(object):
 # TODO(etune): finish code to GC expired leases, and call periodically
 #  e.g. each time lease times out.
 # edit: each leased item generates a leased_key dicom_folders:leased_
-# by_session:item_key
-# with the value of the session. One could periodically check if all items in
-# the processing q
-# have a leased_key. If not, these are expired leases and should be put back
-# into the main q
+# by_session:item_key with the value of the session. One could periodically
+# check if all items in the processing q have a leased_key. If not, these are
+# expired leases and should be put back into the main q

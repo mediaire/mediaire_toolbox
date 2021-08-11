@@ -1,7 +1,13 @@
 # TODO
-# - pub/sub instead of sleep, wait for `result` key update
-# - Fix threading hangup
+# - refactor rate limit with pubsub
+# - bypass that skips on -1
+# - see what can and should be implemented as redis lua scripts
+# - how to do the request timouts (maybe only list tail object)
 #
+# - maybe split test suite into single method tests and queue daemon tests
+# - Fix threading hangup
+# - pub/sub instead of sleep, wait for `result` key update
+# - incorporate into test_redis_wg.py
 # - tests
 #     - immediate acquire
 #     - enqueue to waiting list
@@ -119,7 +125,7 @@ class TestResourcManager(unittest.TestCase):
     RESULT = 'result'
 
     def setUp(self):
-        self.redis = redis.StrictRedis(self.DB_FILE)
+        self.redis = redis.StrictRedis(self.DB_FILE, decode_responses=True)
 
         self.input_queue = RedisWQ(self.INPUT, db=self.redis)
         self.result_queue = RedisWQ(self.RESULT, db=self.redis)
@@ -156,6 +162,73 @@ class TestResourcManager(unittest.TestCase):
         daemon_thread = threading.Thread(name=name + 'Thread',
                                          target=daemon.run)
         self.daemons.append((daemon, daemon_thread))
+
+    def test_config_num_slots(self):
+        """Test that the number of GPU slots can be set."""
+        num_slots = 23
+        test_queue = RedisWQ('slot_test', db=self.redis, gpu_slots=num_slots)
+        self.assertEqual(len(test_queue._slot_keys), num_slots)
+
+    def test__find_free_slot(self):
+        """Test that `_find_free_slot` returns only free slots."""
+        num_slots = 2
+        test_queue = RedisWQ('slot_test', db=self.redis, gpu_slots=num_slots)
+
+        free_slot = test_queue._find_free_slot()
+        self.assertTrue(bool(free_slot))
+
+        self.redis.set('slot:0', 1)
+        free_slot = test_queue._find_free_slot()
+        self.assertTrue(bool(free_slot))
+
+        self.redis.set('slot:1', 1)
+        free_slot = test_queue._find_free_slot()
+        self.assertFalse(bool(free_slot))
+
+    def test__lock_slot(self):
+        """Test that locking a slot works if it is available."""
+        target_slot = 'slot:0'
+        test_queue = RedisWQ('slot_test', db=self.redis, gpu_slots=1)
+        test_queue._lock_slot(target_slot, lease_secs=1)
+        self.assertEqual(self.redis.get(target_slot), test_queue.sessionID())
+
+    def test__lock_slot_fail(self):
+        """Test that locking a slot fails works if it is unavailable."""
+        target_slot = 'slot:0'
+        lock_value = 'locked'
+        self.redis.set(target_slot, lock_value)
+
+        test_queue = RedisWQ('slot_test', db=self.redis, gpu_slots=1)
+        with self.assertRaises(RuntimeError):
+            test_queue._lock_slot(target_slot, lease_secs=1)
+
+        self.assertEqual(self.redis.get(target_slot), lock_value)
+
+    # TODO
+    # def test__lock_slot_expire(self):
+    # pubsub to expire events and check time difference
+
+    def test__request_slot(self):
+        """Test that enqueuing a slot request works."""
+        test_queue = RedisWQ('slot_test', db=self.redis, gpu_slots=1)
+        test_queue._request_slot(timeout=1)
+
+        # TODO LPOS not implemented yet
+        # self.assertTrue(self.redis.lpos(test_queue._slot_request_key,
+        #                                 test_queue.sessionID()))
+        self.assertIn(test_queue.sessionID(),
+                      self.redis.lrange(test_queue._slot_request_key, 0, -1))
+        self.assertTrue(self.redis.exists(test_queue._slot_request_key + ':'
+                                          + test_queue.sessionID()))
+
+    # TODO
+    # def test__request_slot_expire(self):
+    # pubsub to expire events and check time difference
+
+    # TODO
+    # def test_slotting_disabled_bypass(self):
+    # """Check that passing `gpu_slots=-1` bypasses all slotting."""
+    # patch all _slot methods and check they are not called
 
     def test_die_during_execution_max_retries(self):
         """Test crashing Task is put into error queue after max retries."""
