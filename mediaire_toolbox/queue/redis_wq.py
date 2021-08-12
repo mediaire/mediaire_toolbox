@@ -34,7 +34,6 @@ class RedisWQ(object):
     def __init__(self,
                  name: str,
                  db: Optional[redis.client.Redis] = None,
-                 gpu_slots: int = -1,
                  **redis_kwargs):
         """
         Parameters
@@ -43,30 +42,15 @@ class RedisWQ(object):
             The work queue is identified by `name`. The library may create
             other keys with `name` as a prefix.
         db
-            A custom redis database object. `decode_responses=True` _must_ be
-            set. If None is passed, a new redis connection will be created with
-            **redis_kwargs.
-        gpu_slots
-            Number of "memory slots" on the GPU that can be used by workers in
-            vertical scaling mode. Basically the number of workers that are
-            allowed to use the GPU in parallel (which is not necessarily the
-            number of workers allowed to use the CPU in parallel,
-            `envconfig.mdbrain_scale`). If -1 is passed, the slotting feature
-            will be bypassed altogether (corresponds to virtually infinite
-            slots).
+            A custom redis database object.
         **redis_kwargs
             Additional parameters that will be passed to the
             `redis.StrictRedis` constructor of the database object. The default
             connection parameters are:
                 host='localhost', port=6379, db=0,
-            Because the implementation assumes that `decode_responses=True` is
-            set, this value will always override what has been set in
-            **redis_kwargs
         """
         if db is None:
-            # always set `decode_responses=True`, override `redis_kwargs
-            self._db = redis.StrictRedis(**{**redis_kwargs,
-                                            **{'decode_responses': True}})
+            self._db = redis.StrictRedis(**redis_kwargs)
         else:
             self._db = db
         # The session ID will uniquely identify this "worker".
@@ -80,24 +64,6 @@ class RedisWQ(object):
         self._error_messages_q_key = name + ":error_messages"
         self._lease_key_prefix = name + ":leased_by_session:"
         self._limit_key_prefix = name + ":limit:"
-
-        # TODO
-        # envconfig = md_commons.utils.read_yaml(md_commons.constants.ENVCONFIG_PATH)  # noqa: 501
-        # Vertical scaling is done by setting
-        # - `max_processing_studies`: number of Tasks processed in parallel
-        # - `mdbrain_scale`: number of worker images spun up
-        # but unfortunately, RedisWQ is imported by md_commons, so this would
-        # lead to a circular import. For now, use manual parameter.
-        # TODO document this in this method's docsting and in
-        # `confluence/mdbrain Configuration envconfig.yml`.
-        self._slots = gpu_slots
-        # NOTE slot keys are _not_ unique per session but shared across all
-        # sessions!
-        self._slot_key_prefix = 'slot:'
-        self._slot_request_key = 'slot_request'
-        if self._slots > 0:
-            self._slot_keys = set(self._slot_key_prefix + str(slot)
-                                  for slot in range(self._slots))
 
     def sessionID(self):
         """Return the ID for this session."""
@@ -214,8 +180,191 @@ class RedisWQ(object):
         pipe.execute()
         return True
 
+    # for now `lease_secs` is useless!
+    def lease(self,
+              lease_secs: int = 5,
+              block: bool = True,
+              timeout: Optional[int] = None,
+              limit: int = -1,
+              timeunit: str = 'hour'):
+        """Begin working on an item the work queue.
+
+        Check if rate reached limit on work queue. If reached, wait until next
+        timeunit.  If not, then lease item.
+
+        Parameters
+        ----------
+        lease_secs
+            Lease the item for lease_secs.  After that time, other
+            workers may consider this client to have crashed or stalled
+            and pick up the item instead.
+        block
+            True if block until an item is available.
+        timeout
+            Timeout for blocking until an item is available. None to wait
+            unlimited time.
+        limit
+            Maximum leases per timeunit, Negative if there is no limit.
+        timeunit
+            Timeunit of the rate limiter. Either 'sec', 'min' or 'hour'
+
+        Returns
+        -------
+        bytes
+            Leased item in bytes.
+        """
+
+        # first try to get an item from the queue (if block: wait for an item)
+        if block:
+            # TODO redis>=6.2.0: use BLMOVE {} {} RIGHT LEFT
+            item = self._db.brpoplpush(self._main_q_key,
+                                       self._processing_q_key,
+                                       timeout=timeout)
+        else:
+            # TODO redis>=6.2.0: use LMOVE {} {} RIGHT LEFT
+            item = self._db.rpoplpush(self._main_q_key, self._processing_q_key)
+
+        if item:
+            # Check if rate limit for this queue type has been exceeded. If so,
+            # wait until next epoch.
+            # NOTE: if we crash at this line of the program, then GC will
+            # see no lease for this item a later return it to the main queue.
+            logger.info('Leasing item from queue {} with Limit {} per {}'
+                        .format(self._main_q_key, limit, timeunit))
+            # TODO this could probably be solved more elegantly with pubsub
+            while True:
+                if self._limit_rate(limit, timeunit):
+                    break
+                sleeptime = 1.0
+                time.sleep(sleeptime)
+
+            # Record that we (this session id) are working on a key. Expire
+            # that note after the lease timeout.
+            itemkey = self._itemkey(item)
+            logger.info('{} -> {}'.format(self._lease_key_prefix + itemkey,
+                                          self._session))
+            self._db.setex(self._lease_key_prefix + itemkey,
+                           lease_secs,
+                           self._session)
+        return item
+
+    def error(self, value, msg=None):
+        """Handle the case when processing of the item with 'value' failed.
+
+        Optionally provide error message `msg`.
+        """
+        itemkey = self._itemkey(value)
+        if msg is None:
+            msg = 'unknown error'
+        logger.info("{}: Trying to move '{}' to '{}'".format(msg, itemkey,
+                                                             self._error_q_key)
+                    )
+        exit_code = self._db.lrem(self._processing_q_key, 0, value)
+        logger.debug("exit code: {}".format(exit_code))
+        if exit_code == 0:
+            logger.error("Could not find '{}' in '{}'".format(
+                itemkey, self._processing_q_key))
+        else:
+            len_errors = self._db.lpush(self._error_q_key, value)
+            len_msgs = self._db.lpush(self._error_messages_q_key,
+                                      msg.encode('utf-8'))
+            logger.debug("Moved '{}' to '{}'".format(itemkey,
+                                                     self._error_q_key))
+            assert len_errors == len_msgs
+
+    def complete(self, value):
+        """Complete working on the item with 'value'.
+
+        If the lease expired, the item may not have completed, and some
+        other worker may have picked it up.  There is no indication
+        of what happened.
+        """
+        self._db.lrem(self._processing_q_key, 0, value)
+        # If we crash here, then the GC code will try to move the value,
+        # but it will
+        # not be here, which is fine.  So this does not need to be a
+        # transaction.
+        itemkey = self._itemkey(value)
+        self._db.delete(self._lease_key_prefix + itemkey, self._session)
+
+    @staticmethod
+    def get_all_queues_from_config(appconfig: dict, redis_args: dict):
+        queues = {
+            q_identifier: RedisWQ(q_key, **redis_args)
+            for q_identifier, q_key in appconfig['shared']['queues'].items()
+        }
+        return queues
+
+
+# TODO: add functions to clean up all keys associated with "name" when
+# processing is complete.
+
+# TODO(etune): finish code to GC expired leases, and call periodically
+#  e.g. each time lease times out.
+# edit: each leased item generates a leased_key dicom_folders:leased_
+# by_session:item_key with the value of the session. One could periodically
+# check if all items in the processing q have a leased_key. If not, these are
+# expired leases and should be put back into the main q
+
+
+class RedisSlotWQ(RedisWQ):
+    def __init__(self,
+                 name: str,
+                 slots: int,
+                 db: Optional[redis.client.Redis] = None,
+                 **redis_kwargs):
+        """
+        Parameters
+        ----------
+        name
+            The work queue is identified by `name`. The library may create
+            other keys with `name` as a prefix.
+        slots
+            Number of slots that can be used by workers in vertical scaling
+            mode. Basically the number of workers that are allowed to use
+            resources in parallel (which is not necessarily the number of
+            workers allowed to use the CPU in parallel,
+            `envconfig.mdbrain_scale`).
+        db
+            A custom redis database object. `decode_responses=True` _must_ be
+            set. If None is passed, a new redis connection will be created with
+            **redis_kwargs.
+        **redis_kwargs
+            Additional parameters that will be passed to the
+            `redis.StrictRedis` constructor of the database object. The default
+            connection parameters are:
+                host='localhost', port=6379, db=0,
+            Because the implementation assumes that `decode_responses=True` is
+            set, this value will always override what has been set in
+            **redis_kwargs
+        """
+        if db is None:
+            # always set `decode_responses=True`, override `redis_kwargs`
+            db = redis.StrictRedis(**{**redis_kwargs,
+                                      **{'decode_responses': True}})
+
+        super().__init__(name=name, db=db, **redis_kwargs)
+
+        # TODO
+        # envconfig = md_commons.utils.read_yaml(md_commons.constants.ENVCONFIG_PATH)  # noqa: 501
+        # Vertical scaling is done by setting
+        # - `max_processing_studies`: number of Tasks processed in parallel
+        # - `mdbrain_scale`: number of worker images spun up
+        # but unfortunately, RedisWQ is imported by md_commons, so this would
+        # lead to a circular import. For now, use manual parameter.
+        # TODO document this in this method's docsting and in
+        # `confluence/mdbrain Configuration envconfig.yml`.
+        self._slots = slots
+        # NOTE slot keys are _not_ unique per session but shared across all
+        # sessions!
+        self._slot_key_prefix = 'slot:'
+        self._slot_request_key = 'slot_request'
+        if self._slots > 0:
+            self._slot_keys = set(self._slot_key_prefix + str(slot)
+                                  for slot in range(self._slots))
+
     def _find_free_slot(self):
-        """Return key to free GPU slot if available, None otherwise."""
+        """Return key to free resource slot if available, None otherwise."""
         blocked_slots = set(self._db.keys(self._slot_key_prefix + '*'))
         free_slots = self._slot_keys - blocked_slots
         try:
@@ -322,13 +471,12 @@ class RedisWQ(object):
                 # `_lock_slot`.
                 self._request_slot()
 
-    # for now `lease_secs` is useless!
     def lease(self,
-              lease_secs=5,
-              block=True,
-              timeout=None,
-              limit=-1,
-              timeunit='hour'):
+              lease_secs: int = 5,
+              block: bool = True,
+              timeout: Optional[int] = None,
+              limit: int = -1,
+              timeunit: str = 'hour'):
         """Begin working on an item the work queue.
 
         Check if rate reached limit on work queue. If reached, wait until next
@@ -336,18 +484,18 @@ class RedisWQ(object):
 
         Parameters
         ----------
-        lease_secs:
+        lease_secs
             Lease the item for lease_secs.  After that time, other
             workers may consider this client to have crashed or stalled
             and pick up the item instead.
-        block:
+        block
             True if block until an item is available.
-        timeout:
+        timeout
             Timeout for blocking until an item is available. None to wait
             unlimited time.
-        limit: int
+        limit
             Maximum leases per timeunit, Negative if there is no limit.
-        timeunit: str
+        timeunit
             Timeunit of the rate limiter. Either 'sec', 'min' or 'hour'
 
         Returns
@@ -393,61 +541,3 @@ class RedisWQ(object):
                            lease_secs,
                            self._session)
         return item
-
-    def error(self, value, msg=None):
-        """Handle the case when processing of the item with 'value' failed.
-
-        Optionally provide error message `msg`.
-        """
-        itemkey = self._itemkey(value)
-        if msg is None:
-            msg = 'unknown error'
-        logger.info("{}: Trying to move '{}' to '{}'".format(msg, itemkey,
-                                                             self._error_q_key)
-                    )
-        exit_code = self._db.lrem(self._processing_q_key, 0, value)
-        logger.debug("exit code: {}".format(exit_code))
-        if exit_code == 0:
-            logger.error("Could not find '{}' in '{}'".format(
-                itemkey, self._processing_q_key))
-        else:
-            len_errors = self._db.lpush(self._error_q_key, value)
-            len_msgs = self._db.lpush(self._error_messages_q_key,
-                                      msg.encode('utf-8'))
-            logger.debug("Moved '{}' to '{}'".format(itemkey,
-                                                     self._error_q_key))
-            assert len_errors == len_msgs
-
-    def complete(self, value):
-        """Complete working on the item with 'value'.
-
-        If the lease expired, the item may not have completed, and some
-        other worker may have picked it up.  There is no indication
-        of what happened.
-        """
-        self._db.lrem(self._processing_q_key, 0, value)
-        # If we crash here, then the GC code will try to move the value,
-        # but it will
-        # not be here, which is fine.  So this does not need to be a
-        # transaction.
-        itemkey = self._itemkey(value)
-        self._db.delete(self._lease_key_prefix + itemkey, self._session)
-
-    @staticmethod
-    def get_all_queues_from_config(appconfig: dict, redis_args: dict):
-        queues = {
-            q_identifier: RedisWQ(q_key, **redis_args)
-            for q_identifier, q_key in appconfig['shared']['queues'].items()
-        }
-        return queues
-
-
-# TODO: add functions to clean up all keys associated with "name" when
-# processing is complete.
-
-# TODO(etune): finish code to GC expired leases, and call periodically
-#  e.g. each time lease times out.
-# edit: each leased item generates a leased_key dicom_folders:leased_
-# by_session:item_key with the value of the session. One could periodically
-# check if all items in the processing q have a leased_key. If not, these are
-# expired leases and should be put back into the main q
