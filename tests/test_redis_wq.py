@@ -243,6 +243,12 @@ class HangupDaemon(QueueDaemon):
             pass
 
 
+# Run all test cases of `RedisWQ` for `RedisSlotWQ` as well
+@patch('mediaire_toolbox.queue.RedisWQ', new=RedisSlotWQ)
+class TestRedisSlotWQBasic(TestRedisWQ):
+    pass
+
+
 class TestRedisSlotWQ(unittest.TestCase):
     DB_FILE = '/tmp/redis.db'
     INPUT = 'input'
