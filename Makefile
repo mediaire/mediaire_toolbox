@@ -37,13 +37,15 @@ test_resource_manager: build
 	docker run $(IMAGE_BASE_NAME):$(IMAGE_TAG) \
 		nosetests --verbose \
 			tests/test_redis_wq.py:TestRedisSlotWQBasic \
-			tests/test_redis_wq.py:TestRedisSlotWQ
+			tests/test_redis_wq.py:TestRedisSlotWQ \
+			tests/test_redis_wq.py:TestRedisSlotWQDaemon
 
 test_resource_manager_local:
 	pipenv run \
 		nosetests --verbose --logging-level=INFO \
 			tests/test_redis_wq.py:TestRedisSlotWQBasic \
-			tests/test_redis_wq.py:TestRedisSlotWQ
+			tests/test_redis_wq.py:TestRedisSlotWQ \
+			tests/test_redis_wq.py:TestRedisSlotWQDaemon
 
 LOAD_SOCKET = $$(python3 -c 'import json; print(json.load(open("/tmp/redis.db.settings"))["unixsocket"])')
 

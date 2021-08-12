@@ -345,6 +345,14 @@ class RedisSlotWQ(RedisWQ):
 
         super().__init__(name=name, db=db, **redis_kwargs)
 
+        # we need to enable keyspace events for string keys to listen for
+        # slot lock releases
+        # K: Keyspace events, published with __keyspace@<db>__ prefix
+        # g: Generic commands (non-type specific) like DEL, EXPIRE, RENAME, ...
+        # l: List commands
+        # x: Expired events (events generated every time a key expires)
+        self._db.config_set('notify-keyspace-events', 'Kglx')
+
         # TODO
         # envconfig = md_commons.utils.read_yaml(md_commons.constants.ENVCONFIG_PATH)  # noqa: 501
         # Vertical scaling is done by setting
@@ -392,7 +400,9 @@ class RedisSlotWQ(RedisWQ):
         RuntimeError
             If unable to lock slot (slot might not exist or not be available).
         """
-        done = self._db.set(slot_key, self.sessionID(), nx=True, ex=lease_secs)
+        done = (self._db.set(slot_key, self.sessionID(),
+                             nx=True, ex=lease_secs)
+                if slot_key else False)
         if not done:
             raise RuntimeError("Slot `{}` could not be locked."
                                .format(slot_key))
@@ -428,17 +438,49 @@ class RedisSlotWQ(RedisWQ):
                      task_id,
                      ex=timeout)
 
-    # TODO implementation, detailed docs
-    def _remove_slot_request(self):
+    # TODO
+    # self._slot_request_key -> self._slot_request_list_key
+    # @property
+    # def _slot_request_key:
+    #     return self._slot_request_list_key + ':' + self.sessionID()
+
+    # TODO detailed docs, test
+    def _pop_slot_request(self):
         """Remove slot request from the request queue."""
-        raise NotImplementedError
+        removed_session = self._db.rpop(self._slot_request_key)
+        assert removed_session == self.sessionID()
+        self._db.delete(self._slot_request_key + ':' + self.sessionID())
 
-    # TODO implementation, detailed docs
-    def _cleanup_slot_requests(self):
-        """Cleanup expired slot requests from the request queue."""
-        raise NotImplementedError
+    def _new_slot_available(self, lease_secs: int) -> Optional[str]:
+        # TODO more detailed docs, test
+        """When a new slot available, acquire it if eligible."""
+        # TODO check if we expired already + test
+        # TODO make this atomic with transaction, probably needs to be lua
+        lrange = self._db.lrange(self._slot_request_key, -1, -1)
+        first_in_line = lrange[0] if lrange else None
+        if first_in_line == self.sessionID():
+            slot_key = self._find_free_slot()
+            self._lock_slot(slot_key, lease_secs=lease_secs)
+            self._pop_slot_request()
+            return slot_key
+        elif not self._db.exists("{}:{}".format(self._slot_request_key,
+                                                first_in_line)):
+            # The current worker first-in-line's slot request has expired, so
+            # they won't pick their slot up. Remove them from the request
+            # queue. This will publish an event to waiting workers (including
+            # this one), so they right will be notified.
+            # We are _not_ using RPOP here because all waiting clients will
+            # perform this cleanup action. With M workers `LLEN slot_request`
+            # can not be more than M. If all M requests have expired and all
+            # workers check the whole queue in the most pathological order
+            # (the one who is first in line checks last), the whole queue will
+            # still be cleared out.
+            self._db.lrem(self._slot_request_key, 0, first_in_line)
+        # TODO reset expire on new front item + test
+        return None
 
-    def _wait_for_slot(self) -> str:
+    def _wait_for_slot(self, lease_secs: int, timeout: int) -> str:
+        # TODO docs: review timeout param, still correct?
         """Wait until a GPU slot is available, and lock it.
 
         If no slot is available immediately, enqueue in request queue, wait
@@ -446,30 +488,65 @@ class RedisSlotWQ(RedisWQ):
 
         This uses redis PubSub to wait blockingly instead of polling.
 
+        Parameters
+        ----------
+        lease_secs
+            Lock the slot for `lease_secs` seconds. After that time, other
+            workers may consider this client to have crashed or stalled
+            and pick up the item instead.
+        timeout
+            Number of seconds after which trying to acquire a slot will be
+            given up.
+
         Returns
         -------
         str
             redis key of the acquired slot
         """
-        if self._slots < 0:
-            # slotting disabled
-            return self._slot_key_prefix + "0"
+        try:
+            slot = self._find_free_slot()
+            logger.debug("Got slot {}".format(slot))
+            self._lock_slot(slot, lease_secs=lease_secs)
+            logger.debug("Locked slot {}".format(slot))
+            return slot
+        except RuntimeError:
+            # Slot was locked by somebody else between `_find_free_slot()` and
+            # `_lock_slot()` call.
+            # Or: `slot` was `None`, no free slot available in the first place.
+            logger.debug("Could not lock slot {}".format(slot))
 
-        # TODO not implemented yet
-        return
+            # enqueue in request line
+            self._request_slot(timeout=timeout)
+            logger.debug("Requested slot {}".format(slot))
 
-        # TODO make sure slot cannot be taken between find_free_lost and
-        # _lock_slot. maybe use transactions?
-        slot = self._find_free_slot()
+            # TODO what if I'm the last task and the expire event fires after
+            # find_free_slot but before psubscribe?
 
-        while not slot:
-            try:
-                self._lock_slot(slot)
-            except RuntimeError:
-                # Use try/accept here instead of if slot/else in case the slot
-                # is locked by another worker between `_find_free_slot` and
-                # `_lock_slot`.
-                self._request_slot()
+            # wait for slots to get free or the slot request queue to be
+            # changed
+            # TODO maybe use pipe.watch?
+            pubsub = self._db.pubsub()
+            pubsub.psubscribe('__keyspace@*:{}*'.format(self._slot_key_prefix))
+            pubsub.psubscribe('__keyspace@*:{}'.format(self._slot_request_key))
+            # TODO need to subscribe to list change events as well!
+            logger.debug("Subscribed")
+            for event in pubsub.listen():
+                logger.debug("Received event: {}".format(event))
+                if event['type'] != 'pmessage':
+                    continue
+                if (event['data'] == 'del'
+                        or event['data'] == 'expired'
+                        or event['data'] == 'lrem'):
+                    free_slot = ':'.join(event['channel'].split(':')[1:])
+                    logger.debug("Newly available slot: {}".format(free_slot))
+                    slot = self._new_slot_available(lease_secs)
+                    logger.debug("Processed {}, got slot: {}"
+                                 .format(self._slot_request_key, slot))
+                    if slot:
+                        logger.debug("returning {}".format(slot))
+                        return slot
+                    # If we could not acquire a slot, just continue listening
+                    # for more events.
 
     def lease(self,
               lease_secs: int = 5,
@@ -477,6 +554,7 @@ class RedisSlotWQ(RedisWQ):
               timeout: Optional[int] = None,
               limit: int = -1,
               timeunit: str = 'hour'):
+        # TODO docs: review timeout param, still correct? None still possible?
         """Begin working on an item the work queue.
 
         Check if rate reached limit on work queue. If reached, wait until next
@@ -485,7 +563,7 @@ class RedisSlotWQ(RedisWQ):
         Parameters
         ----------
         lease_secs
-            Lease the item for lease_secs.  After that time, other
+            Lease the item for `lease_secs` seconds. After that time, other
             workers may consider this client to have crashed or stalled
             and pick up the item instead.
         block
@@ -530,7 +608,7 @@ class RedisSlotWQ(RedisWQ):
 
             # Only lease the item if a GPU slot is available, otherwise secure
             # a spot in the `slot_request` queue.
-            self._wait_for_slot()
+            self._wait_for_slot(lease_secs=lease_secs, timeout=timeout)
 
             # Record that we (this session id) are working on a key. Expire
             # that note after the lease timeout.
