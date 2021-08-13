@@ -249,32 +249,33 @@ class TestRedisSlotWQ(unittest.TestCase):
         """Test that `_find_free_slot` returns only free slots."""
         num_slots = 2
         test_queue = RedisSlotWQ('slot_test', slots=num_slots, db=self.redis)
+        slots = list(test_queue._slot_keys)
 
         free_slot = test_queue._find_free_slot()
         self.assertTrue(bool(free_slot))
 
-        self.redis.set('slot:0', 1)
+        self.redis.set(slots[0], 1)
         free_slot = test_queue._find_free_slot()
         self.assertTrue(bool(free_slot))
 
-        self.redis.set('slot:1', 1)
+        self.redis.set(slots[1], 1)
         free_slot = test_queue._find_free_slot()
         self.assertFalse(bool(free_slot))
 
     def test__lock_slot(self):
         """Test that locking a slot works if it is available."""
-        target_slot = 'slot:0'
         test_queue = RedisSlotWQ('slot_test', slots=1, db=self.redis)
+        target_slot = list(test_queue._slot_keys)[0]
         test_queue._lock_slot(target_slot, lease_secs=1)
         self.assertEqual(self.redis.get(target_slot), test_queue.sessionID())
 
     def test__lock_slot_fail(self):
         """Test that locking a slot fails works if it is unavailable."""
-        target_slot = 'slot:0'
+        test_queue = RedisSlotWQ('slot_test', slots=1, db=self.redis)
+        target_slot = list(test_queue._slot_keys)[0]
         lock_value = 'locked'
         self.redis.set(target_slot, lock_value)
 
-        test_queue = RedisSlotWQ('slot_test', slots=1, db=self.redis)
         with self.assertRaises(RuntimeError):
             test_queue._lock_slot(target_slot, lease_secs=1)
 
@@ -300,12 +301,12 @@ class TestRedisSlotWQ(unittest.TestCase):
         test_queue._request_slot(timeout=1)
 
         # TODO LPOS not implemented yet in redislite==5.0.x
-        # self.assertTrue(self.redis.lpos(test_queue._slot_request_key,
+        # self.assertTrue(self.redis.lpos(test_queue._slot_request_list_key,
         #                                 test_queue.sessionID()))
         self.assertIn(test_queue.sessionID(),
-                      self.redis.lrange(test_queue._slot_request_key, 0, -1))
-        self.assertTrue(self.redis.exists(test_queue._slot_request_key + ':'
-                                          + test_queue.sessionID()))
+                      self.redis.lrange(test_queue._slot_request_list_key,
+                                        0, -1))
+        self.assertTrue(self.redis.exists(test_queue._slot_request_key))
 
     # TODO
     # def test__request_slot_expire(self):
@@ -318,9 +319,8 @@ class TestRedisSlotWQ(unittest.TestCase):
         test_queue._request_slot(timeout=1)
         test_queue._pop_slot_request()
 
+        self.assertFalse(self.redis.exists(test_queue._slot_request_list_key))
         self.assertFalse(self.redis.exists(test_queue._slot_request_key))
-        self.assertFalse(self.redis.exists(test_queue._slot_request_key + ':'
-                                           + test_queue.sessionID()))
 
     def test__new_slot_available_first(self):
         """Test that available slot is acquired if we are first-in-line."""
@@ -337,43 +337,43 @@ class TestRedisSlotWQ(unittest.TestCase):
         test_queue = RedisSlotWQ('slot_test', slots=1, db=self.redis)
         other_session_id = 'other_session_id'
         self.assertNotEqual(other_session_id, test_queue.sessionID())
-        self.redis.set(test_queue._slot_request_key + ":" + other_session_id,
-                       'task_id')
-        self.redis.lpush(test_queue._slot_request_key, other_session_id)
+        other_slot_request_key = \
+            '{}:{}'.format(test_queue._slot_request_list_key, other_session_id)
+        self.redis.set(other_slot_request_key, 'task_id')
+        self.redis.lpush(test_queue._slot_request_list_key, other_session_id)
 
         test_queue._request_slot(timeout=1)
         slot = test_queue._new_slot_available(lease_secs=1)
 
         self.assertIsNone(slot)
-        self.assertEqual(self.redis.lrange(test_queue._slot_request_key,
+        self.assertEqual(self.redis.lrange(test_queue._slot_request_list_key,
                                            -1, -1)[0],
                          other_session_id)
-        self.assertTrue(self.redis.exists(test_queue._slot_request_key
-                                          + ":" + other_session_id))
+        self.assertTrue(self.redis.exists(other_slot_request_key))
 
     def test__new_slot_available_not_first_cleanup(self):
         """Test that expired first-in-line requests are cleaned up."""
         test_queue = RedisSlotWQ('slot_test', slots=1, db=self.redis)
         other_session_id = 'other_session_id'
         self.assertNotEqual(other_session_id, test_queue.sessionID())
-        self.redis.lpush(test_queue._slot_request_key, other_session_id)
+        self.redis.lpush(test_queue._slot_request_list_key, other_session_id)
 
         test_queue._request_slot(timeout=1)
         slot = test_queue._new_slot_available(lease_secs=1)
 
         self.assertIsNone(slot)
         self.assertNotIn(other_session_id,
-                         self.redis.lrange(test_queue._slot_request_key,
+                         self.redis.lrange(test_queue._slot_request_list_key,
                                            0, -1))
 
     # TODO
     @unittest.skip("just for debugging")
     def test__wait_for_slot_pubsub(self):
-        target_slot = 'slot:0'
+        test_queue = RedisSlotWQ('slot_test', slots=1, db=self.redis)
+        target_slot = list(test_queue._slot_keys)[0]
         lock_value = 'locked'
         self.redis.set(target_slot, lock_value)
 
-        test_queue = RedisSlotWQ('slot_test', slots=1, db=self.redis)
         test_queue._wait_for_slot(lease_secs=1, timeout=1)
 
         self.assertTrue(False)
@@ -443,7 +443,7 @@ class TestRedisSlotWQ(unittest.TestCase):
 
         change_funcs = [(self.redis.delete, (target_slot)),
                         (self.redis.expire, (target_slot, 0)),
-                        (self.redis.lrem, (test_queue._slot_request_key,
+                        (self.redis.lrem, (test_queue._slot_request_list_key,
                                            0,
                                            other_session_id))]
         for change_func, change_args in change_funcs:
@@ -454,7 +454,7 @@ class TestRedisSlotWQ(unittest.TestCase):
                 self.setUp()  # clear database
 
                 self.redis.set(target_slot, other_session_id)
-                self.redis.lpush(test_queue._slot_request_key,
+                self.redis.lpush(test_queue._slot_request_list_key,
                                  other_session_id)
 
                 wait_thread = threading.Thread(name="_wait_for_slot_Thread",

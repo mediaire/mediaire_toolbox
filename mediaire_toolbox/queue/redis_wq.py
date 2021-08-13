@@ -360,20 +360,21 @@ class RedisSlotWQ(RedisWQ):
         # - `mdbrain_scale`: number of worker images spun up
         # but unfortunately, RedisWQ is imported by md_commons, so this would
         # lead to a circular import. For now, use manual parameter.
-        # TODO document this in this method's docsting and in
-        # `confluence/mdbrain Configuration envconfig.yml`.
         self._slots = slots
         # NOTE slot keys are _not_ unique per session but shared across all
         # sessions!
-        self._slot_key_prefix = 'slot:'
-        self._slot_request_key = 'slot_request'
+        self._slot_key_prefix = 'slot'
+        self._slot_request_list_key = 'slot_request'
+        self._slot_request_key = '{}:{}'.format(self._slot_request_list_key,
+                                                self.sessionID())
         if self._slots > 0:
-            self._slot_keys = set(self._slot_key_prefix + str(slot)
+            self._slot_keys = set('{}:{}'.format(self._slot_key_prefix, slot)
                                   for slot in range(self._slots))
 
     def _find_free_slot(self):
         """Return key to free resource slot if available, None otherwise."""
-        blocked_slots = set(self._db.keys(self._slot_key_prefix + '*'))
+        blocked_slots = set(self._db.keys('{}:*'
+                                          .format(self._slot_key_prefix)))
         free_slots = self._slot_keys - blocked_slots
         try:
             return free_slots.pop()
@@ -432,24 +433,24 @@ class RedisSlotWQ(RedisWQ):
             Value identifying the task the slot is reserved for. This usually
             is :meth:`._itemkey()` of the `item` to be processed. Can be empty.
         """
-        self._db.lpush(self._slot_request_key, self.sessionID())
+        self._db.lpush(self._slot_request_list_key, self.sessionID())
         # TODO should we do nx=True here and handle errors?
-        self._db.set(self._slot_request_key + ':' + self.sessionID(),
+        self._db.set(self._slot_request_list_key + ':' + self.sessionID(),
                      task_id,
                      ex=timeout)
 
     # TODO
-    # self._slot_request_key -> self._slot_request_list_key
+    # self._slot_request_list_key -> self._slot_request_list_key
     # @property
-    # def _slot_request_key:
+    # def _slot_request_list_key:
     #     return self._slot_request_list_key + ':' + self.sessionID()
 
     # TODO detailed docs, test
     def _pop_slot_request(self):
         """Remove slot request from the request queue."""
-        removed_session = self._db.rpop(self._slot_request_key)
+        removed_session = self._db.rpop(self._slot_request_list_key)
         assert removed_session == self.sessionID()
-        self._db.delete(self._slot_request_key + ':' + self.sessionID())
+        self._db.delete(self._slot_request_list_key + ':' + self.sessionID())
 
     def _new_slot_available(self, lease_secs: int) -> Optional[str]:
         # TODO more detailed docs, test
@@ -460,14 +461,14 @@ class RedisSlotWQ(RedisWQ):
         # self.redis.execute('MULTI')
         # self._perform_action()
         # self.redis.execute('EXEC')
-        lrange = self._db.lrange(self._slot_request_key, -1, -1)
+        lrange = self._db.lrange(self._slot_request_list_key, -1, -1)
         first_in_line = lrange[0] if lrange else None
         if first_in_line == self.sessionID():
             slot_key = self._find_free_slot()
             self._lock_slot(slot_key, lease_secs=lease_secs)
             self._pop_slot_request()
             return slot_key
-        elif not self._db.exists("{}:{}".format(self._slot_request_key,
+        elif not self._db.exists("{}:{}".format(self._slot_request_list_key,
                                                 first_in_line)):
             # The current worker first-in-line's slot request has expired, so
             # they won't pick their slot up. Remove them from the request
@@ -479,7 +480,7 @@ class RedisSlotWQ(RedisWQ):
             # workers check the whole queue in the most pathological order
             # (the one who is first in line checks last), the whole queue will
             # still be cleared out.
-            self._db.lrem(self._slot_request_key, 0, first_in_line)
+            self._db.lrem(self._slot_request_list_key, 0, first_in_line)
         # TODO reset expire on new front item + test
         return None
 
@@ -531,8 +532,10 @@ class RedisSlotWQ(RedisWQ):
             # changed
             # TODO maybe use pipe.watch?
             pubsub = self._db.pubsub()
-            pubsub.psubscribe('__keyspace@*:{}*'.format(self._slot_key_prefix))
-            pubsub.psubscribe('__keyspace@*:{}'.format(self._slot_request_key))
+            pubsub.psubscribe('__keyspace@*:{}:*'
+                              .format(self._slot_key_prefix))
+            pubsub.psubscribe('__keyspace@*:{}'
+                              .format(self._slot_request_list_key))
             # TODO need to subscribe to list change events as well!
             logger.debug("Subscribed")
             for event in pubsub.listen():
@@ -546,7 +549,7 @@ class RedisSlotWQ(RedisWQ):
                     logger.debug("Newly available slot: {}".format(free_slot))
                     slot = self._new_slot_available(lease_secs)
                     logger.debug("Processed {}, got slot: {}"
-                                 .format(self._slot_request_key, slot))
+                                 .format(self._slot_request_list_key, slot))
                     if slot:
                         logger.debug("returning {}".format(slot))
                         return slot
@@ -611,7 +614,8 @@ class RedisSlotWQ(RedisWQ):
                 sleeptime = 1.0
                 time.sleep(sleeptime)
 
-            # Only lease the item if a GPU slot is available, otherwise secure
+            # TODO change comment
+            # Only lease the item if a slot is available, otherwise secure
             # a spot in the `slot_request` queue.
             self._wait_for_slot(lease_secs=lease_secs, timeout=timeout)
 
