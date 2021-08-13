@@ -371,6 +371,11 @@ class RedisSlotWQ(RedisWQ):
             self._slot_keys = set('{}:{}'.format(self._slot_key_prefix, slot)
                                   for slot in range(self._slots))
 
+    @staticmethod
+    def _px(ex: float):
+        """Convert EX in fractional seconds to PX in integer miliseconds."""
+        return int(ex * 1000)
+
     def _find_free_slot(self):
         """Return key to free resource slot if available, None otherwise."""
         blocked_slots = set(self._db.keys('{}:*'
@@ -402,7 +407,7 @@ class RedisSlotWQ(RedisWQ):
             If unable to lock slot (slot might not exist or not be available).
         """
         done = (self._db.set(slot_key, self.sessionID(),
-                             nx=True, ex=lease_secs)
+                             nx=True, px=self._px(lease_secs))
                 if slot_key else False)
         if not done:
             raise RuntimeError("Slot `{}` could not be locked."
@@ -435,9 +440,7 @@ class RedisSlotWQ(RedisWQ):
         """
         self._db.lpush(self._slot_request_list_key, self.sessionID())
         # TODO should we do nx=True here and handle errors?
-        self._db.set(self._slot_request_list_key + ':' + self.sessionID(),
-                     task_id,
-                     ex=timeout)
+        self._db.set(self._slot_request_key, task_id, px=self._px(timeout))
 
     # TODO
     # self._slot_request_list_key -> self._slot_request_list_key
@@ -450,9 +453,9 @@ class RedisSlotWQ(RedisWQ):
         """Remove slot request from the request queue."""
         removed_session = self._db.rpop(self._slot_request_list_key)
         assert removed_session == self.sessionID()
-        self._db.delete(self._slot_request_list_key + ':' + self.sessionID())
+        self._db.delete(self._slot_request_key)
 
-    def _new_slot_available(self, lease_secs: int) -> Optional[str]:
+    def _new_slot_available(self, lease_secs: float) -> Optional[str]:
         # TODO more detailed docs, test
         """When a new slot available, acquire it if eligible."""
         # TODO check if we expired already + test
@@ -484,7 +487,7 @@ class RedisSlotWQ(RedisWQ):
         # TODO reset expire on new front item + test
         return None
 
-    def _wait_for_slot(self, lease_secs: int, timeout: int) -> str:
+    def _wait_for_slot(self, lease_secs: float, timeout: float) -> str:
         # TODO docs: review timeout param, still correct?
         """Wait until a GPU slot is available, and lock it.
 
@@ -557,9 +560,9 @@ class RedisSlotWQ(RedisWQ):
                     # for more events.
 
     def lease(self,
-              lease_secs: int = 5,
+              lease_secs: float,
               block: bool = True,
-              timeout: Optional[int] = None,
+              timeout: Optional[float] = None,
               limit: int = -1,
               timeunit: str = 'hour'):
         # TODO docs: review timeout param, still correct? None still possible?
@@ -573,7 +576,7 @@ class RedisSlotWQ(RedisWQ):
         lease_secs
             Lease the item for `lease_secs` seconds. After that time, other
             workers may consider this client to have crashed or stalled
-            and pick up the item instead.
+            and pick up the item instead. Fractional values are supported.
         block
             True if block until an item is available.
         timeout

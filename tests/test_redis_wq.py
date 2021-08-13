@@ -291,9 +291,17 @@ class TestRedisSlotWQ(unittest.TestCase):
 
         self.assertFalse(self.redis.exists(str(target_slot)))
 
-    # TODO
-    # def test__lock_slot_expire(self):
-    # pubsub to expire events and check time difference
+    def test__lock_slot_expire(self):
+        """Check that slot locks expire after lease time."""
+        expire = 0.1
+        test_queue = RedisSlotWQ('slot_test', slots=1, db=self.redis)
+
+        target_slot = test_queue._find_free_slot()
+        self.assertIsNotNone(target_slot)
+        test_queue._lock_slot(target_slot, lease_secs=expire)
+        time.sleep(1.1*expire)
+
+        self.assertFalse(self.redis.exists(target_slot))
 
     def test__request_slot(self):
         """Test that enqueuing a slot request works."""
@@ -308,9 +316,18 @@ class TestRedisSlotWQ(unittest.TestCase):
                                         0, -1))
         self.assertTrue(self.redis.exists(test_queue._slot_request_key))
 
-    # TODO
-    # def test__request_slot_expire(self):
-    # pubsub to expire events and check time difference
+    def test__request_slot_expire(self):
+        """Check that slot request keys expire after timout."""
+        expire = 0.1
+        test_queue = RedisSlotWQ('slot_test', slots=1, db=self.redis)
+
+        test_queue._request_slot(timeout=expire)
+        time.sleep(1.1*expire)
+
+        self.assertFalse(self.redis.exists(test_queue._slot_request_key))
+        # Don't check for _slot_request_list_key because that does not get
+        # cleaend up automatically. See
+        # :meth:`test__new_slot_available_not_first_cleanup()`
 
     def test__pop_slot_request(self):
         """Test that `_pop_slot_request` removes requests."""
