@@ -456,6 +456,10 @@ class RedisSlotWQ(RedisWQ):
         """When a new slot available, acquire it if eligible."""
         # TODO check if we expired already + test
         # TODO make this atomic with transaction, probably needs to be lua
+        # instead of redis.pipeline, we can use
+        # self.redis.execute('MULTI')
+        # self._perform_action()
+        # self.redis.execute('EXEC')
         lrange = self._db.lrange(self._slot_request_key, -1, -1)
         first_in_line = lrange[0] if lrange else None
         if first_in_line == self.sessionID():
@@ -503,6 +507,7 @@ class RedisSlotWQ(RedisWQ):
         str
             redis key of the acquired slot
         """
+        slot = None
         try:
             slot = self._find_free_slot()
             logger.debug("Got slot {}".format(slot))
