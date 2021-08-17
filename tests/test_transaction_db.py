@@ -6,9 +6,12 @@ import os
 import types
 import sys
 import traceback
-
 from datetime import datetime, date, timezone
+
+from sqlite3 import OperationalError as Sqlite3OperationalError
 from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.sql import sqltypes
 
 from mediaire_toolbox.transaction_db.transaction_db import TransactionDB
 from mediaire_toolbox.transaction_db.model import (
@@ -18,8 +21,6 @@ from mediaire_toolbox.transaction_db.model import (
 from mediaire_toolbox.transaction_db.exceptions import TransactionDBException
 
 from temp_db_base import TempDBFactory
-from sqlite3 import OperationalError as Sqlite3OperationalError
-from sqlalchemy.exc import OperationalError
 
 temp_db = TempDBFactory('test_transaction_db')
 
@@ -789,15 +790,41 @@ class TestTransactionDB(unittest.TestCase):
         md = t_db.get_study_metadata('s1')
 
         self.assertEqual('longitudinal_grazer', md.origin)
-        
+
     def test_study_metadata_to_dict(self):
         md = StudiesMetadata()
         md.origin = 'dicom_grazer'
         md.c_move_time = datetime.utcnow()
         md.study_id = 's1'
-        
+
         self.assertEqual({
             'origin': 'dicom_grazer',
             'c_move_time': Transaction._datetime_to_str(md.c_move_time),
             'study_id': 's1'
         }, md.to_dict())
+
+    def test_datetime_utc_validation_accept(self):
+        """Checks that DateTime fields in all tables accept UTC values."""
+        for TableClass in [Transaction, UserTransaction, User, Role,
+                           UserRole, StudiesMetadata]:
+            row = TableClass()
+            for column in row.__table__.columns:
+                if type(column.type) != sqltypes.DateTime:
+                    continue
+                with self.subTest(table=TableClass, column=column):
+                    print(column)
+                    setattr(row, column.name, datetime.now(timezone.utc))
+
+    def test_datetime_utc_validation_reject(self):
+        """Checks that DateTime fields in all tables reject non-UTC values."""
+        for TableClass in [Transaction, UserTransaction, User, Role,
+                           UserRole, StudiesMetadata]:
+            row = TableClass()
+            for column in row.__table__.columns:
+                if type(column.type) != sqltypes.DateTime:
+                    continue
+                with self.subTest(table=TableClass, column=column):
+                    print(column)
+                    with self.assertRaises(ValueError):
+                        setattr(row, column.name, datetime.now())
+

@@ -4,12 +4,20 @@ from sqlalchemy import (
     Column, Integer, String, Sequence, DateTime, Date, Enum, ForeignKey
 )
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import validates
 from passlib.apps import custom_app_context as pwd_context
 
 from mediaire_toolbox.task_state import TaskState
 from mediaire_toolbox import constants
 
 Base = declarative_base()
+
+
+def validate_utc(key, datetime_obj):
+    """Only accepts `datetime_obj` in UTC for `key`."""
+    if datetime_obj.tzinfo != datetime.timezone.utc:
+        raise ValueError("{} only accepts UTC values".format(key))
+    return datetime_obj
 
 
 # TODO Change to a dataclass when moving to Python 3.7
@@ -117,6 +125,10 @@ class Transaction(Base):
             if str_ else None
         )
 
+    @validates('start_date', 'end_date', 'creation_date', 'data_uploaded')
+    def validate_utc(self, key, datetime_obj):
+        validate_utc(key, datetime_obj)
+
     def to_dict(self):
         return {
             'transaction_id': self.transaction_id,
@@ -215,6 +227,10 @@ class StudiesMetadata(Base):
     # if auto_pull
     c_move_time = Column(DateTime())
 
+    @validates('c_move_time')
+    def validate_utc(self, key, datetime_obj):
+        validate_utc(key, datetime_obj)
+
     def to_dict(self):
         return {'study_id': self.study_id,
                 'origin': self.origin,
@@ -232,7 +248,14 @@ class User(Base):
     name = Column(String(255), unique=True)
     hashed_password = Column(String(128))
     # Datetime the user was added
-    added = Column(DateTime(), default=datetime.datetime.utcnow)
+    added = Column(
+        DateTime(),
+        default=lambda: datetime.datetime.now(datetime.timezone.utc)
+    )
+
+    @validates('added')
+    def validate_utc(self, key, datetime_obj):
+        validate_utc(key, datetime_obj)
 
     @staticmethod
     def password_hash(password):
@@ -267,6 +290,10 @@ class UserTransaction(Base):
     transaction_id = Column(Integer, ForeignKey('transactions.transaction_id'),
                             primary_key=True)
 
+    @validates()
+    def validate_utc(self, key, datetime_obj):
+        validate_utc(key, datetime_obj)
+
     def to_dict(self):
         return {'user_id': self.user_id,
                 'transaction_id': self.transaction_id}
@@ -288,6 +315,10 @@ class UserRole(Base):
     role_id = Column(String(64), ForeignKey('roles.role_id'),
                      primary_key=True)
 
+    @validates()
+    def validate_utc(self, key, datetime_obj):
+        validate_utc(key, datetime_obj)
+
     def to_dict(self):
         return {'user_id': self.user_id,
                 'role_id': self.role_id}
@@ -307,6 +338,10 @@ class UserPreferences(Base):
     user_id = Column(Integer, ForeignKey('users.id'),
                      primary_key=True)
     report_language = Column(String(255))
+
+    @validates()
+    def validate_utc(self, key, datetime_obj):
+        validate_utc(key, datetime_obj)
 
     def to_dict(self):
         return {'user_id': self.user_id,
@@ -331,6 +366,10 @@ class Role(Base):
     # encoded permissions for this role, 1 bit for each
     permissions = Column(Integer)
 
+    @validates()
+    def validate_utc(self, key, datetime_obj):
+        validate_utc(key, datetime_obj)
+
     def to_dict(self):
         return {'role_id': self.user_id}
 
@@ -347,6 +386,10 @@ class SchemaVersion(Base):
                     default=constants.TRANSACTIONS_DB_SCHEMA_NAME)
     schema_version = Column(Integer,
                             default=constants.TRANSACTIONS_DB_SCHEMA_VERSION)
+
+    @validates()
+    def validate_utc(self, key, datetime_obj):
+        validate_utc(key, datetime_obj)
 
 
 def create_all(engine):
