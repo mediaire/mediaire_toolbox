@@ -1,7 +1,8 @@
 import datetime
 
-from sqlalchemy import Column, Integer, String, Sequence, DateTime, Date, Enum, \
-    ForeignKey
+from sqlalchemy import (
+    Column, Integer, String, Sequence, DateTime, Date, Enum, ForeignKey
+)
 from sqlalchemy.ext.declarative import declarative_base
 from passlib.apps import custom_app_context as pwd_context
 
@@ -108,7 +109,7 @@ class Transaction(Base):
         return (
             dt.strftime("%Y-%m-%d %H:%M:%S") if dt else None
         )
-        
+
     @staticmethod
     def _str_to_datetime(str_):
         return (
@@ -195,8 +196,12 @@ class Transaction(Base):
         return self
 
     def __repr__(self):
-        return "<Transaction(transaction_id='%s', patient_id='%s', start_date='%s')>" % (
-            self.transaction_id, self.patient_id, self.start_date)
+        return ("<Transaction("
+                "transaction_id='{}',"
+                " patient_id='{}',"
+                " start_date='{}')>".format(self.transaction_id,
+                                            self.patient_id,
+                                            self.start_date))
 
 
 class StudiesMetadata(Base):
@@ -254,7 +259,7 @@ class User(Base):
 
 class UserTransaction(Base):
 
-    """for multi-tenant pipelines, transactions might be associated with users"""
+    """for multi-tenant pipelines, transactions might be associated w/ users"""
     __tablename__ = 'users_transactions'
 
     user_id = Column(Integer, ForeignKey('users.id'),
