@@ -3,26 +3,22 @@ import json
 import threading
 import shutil
 
+import datetime
+
 from sqlalchemy.ext.automap import automap_base
 from sqlalchemy.orm import sessionmaker, scoped_session
 
-from mediaire_toolbox.constants import TRANSACTIONS_DB_SCHEMA_NAME, \
-    TRANSACTIONS_DB_SCHEMA_VERSION
-from mediaire_toolbox.transaction_db.model import Transaction, \
-    SchemaVersion, \
-    create_all, \
-    UserTransaction, \
-    User, \
-    Role, \
+from mediaire_toolbox.constants import (TRANSACTIONS_DB_SCHEMA_NAME,
+                                        TRANSACTIONS_DB_SCHEMA_VERSION)
+from mediaire_toolbox.transaction_db.model import (
+    Transaction, SchemaVersion, create_all, UserTransaction, User, Role,
     UserRole, UserPreferences, StudiesMetadata
-
+)
 from mediaire_toolbox.transaction_db.exceptions import TransactionDBException
-from mediaire_toolbox.transaction_db import migrations
-from mediaire_toolbox.transaction_db import index
+from mediaire_toolbox.transaction_db import migrations, index
 from mediaire_toolbox.task_state import TaskState
 from mediaire_toolbox.transaction_db.t_db_retry import t_db_retry
 
-import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +62,8 @@ def migrate(session, engine, db_version):
     i.e a schema_version of 5 does not mean the values are indexed.
     """
     from_schema_version = db_version.schema_version
-    for version in range(from_schema_version + 1, TRANSACTIONS_DB_SCHEMA_VERSION + 1):
+    for version in range(from_schema_version + 1,
+                         TRANSACTIONS_DB_SCHEMA_VERSION + 1):
         logger.info("Applying database migration to version %s" % version)
         try:
             for command in migrations.MIGRATIONS[version]:
@@ -208,7 +205,7 @@ class TransactionDB:
             try:
                 if(t.transaction_id):
                     self.session.delete(t)
-            except:
+            except Exception:
                 pass
             raise
 
@@ -220,7 +217,7 @@ class TransactionDB:
         finally:
             # we should always complete the lifetime of the connection,
             # otherwise we might run into timeout errors
-            # (see https://docs.sqlalchemy.org/en/latest/orm/session_transaction.html)
+            # (see https://docs.sqlalchemy.org/en/latest/orm/session_transaction.html)  # noqa: 501
             self.session.commit()
 
     def _get_transaction_or_raise_exception(self, id_: int):
@@ -255,7 +252,7 @@ class TransactionDB:
             if last_message:
                 t.last_message = last_message
             self.session.commit()
-        except:
+        except Exception:
             self.session.rollback()
             raise
 
@@ -299,7 +296,7 @@ class TransactionDB:
                        id_: int,
                        new_processing_state: str,
                        last_message: str,
-                       task_progress: int=0
+                       task_progress: int = 0
                        ):
         """to be called when a transaction changes from one processing task
         to another
@@ -330,7 +327,7 @@ class TransactionDB:
                 # set start date first time transaction was set to processing
                 t.start_date = datetime.datetime.utcnow()
             self.session.commit()
-        except:
+        except Exception:
             self.session.rollback()
             raise
 
@@ -349,13 +346,13 @@ class TransactionDB:
                 t.end_date = datetime.datetime.utcnow()
             t.error = cause
             self.session.commit()
-        except:
+        except Exception:
             self.session.rollback()
             raise
 
     @t_db_retry
     @lock
-    def set_completed(self, id_: int, clear_error: bool=True):
+    def set_completed(self, id_: int, clear_error: bool = True):
         """to be called when the transaction completes successfully.
         Error field will be set to '' only if clear_error = True.
         End_date automatically adjusted. Status is automatically set to
@@ -373,7 +370,7 @@ class TransactionDB:
             if clear_error:
                 t.error = ''
             self.session.commit()
-        except:
+        except Exception:
             self.session.rollback()
             raise
 
@@ -387,13 +384,13 @@ class TransactionDB:
             t = self._get_transaction_or_raise_exception(id_)
             t.status = status
             self.session.commit()
-        except:
+        except Exception:
             self.session.rollback()
             raise
 
     @t_db_retry
     @lock
-    def set_skipped(self, id_: int, cause: str=None):
+    def set_skipped(self, id_: int, cause: str = None):
         """to be called when the transaction is skipped. Save skip information
         from 'cause'"""
         try:
@@ -402,13 +399,13 @@ class TransactionDB:
             if cause:
                 t.error = cause
             self.session.commit()
-        except:
+        except Exception:
             self.session.rollback()
             raise
 
     @t_db_retry
     @lock
-    def set_cancelled(self, id_: int, cause: str=None):
+    def set_cancelled(self, id_: int, cause: str = None):
         """to be called when the transaction is cancelled. Save cancel information
         from 'cause'"""
         try:
@@ -417,7 +414,7 @@ class TransactionDB:
             if cause:
                 t.error = cause
             self.session.commit()
-        except:
+        except Exception:
             self.session.rollback()
             raise
 
@@ -429,7 +426,7 @@ class TransactionDB:
             t = self._get_transaction_or_raise_exception(id_)
             t.archived = 1
             self.session.commit()
-        except:
+        except Exception:
             self.session.rollback()
             raise
 
@@ -442,7 +439,7 @@ class TransactionDB:
             t = self._get_transaction_or_raise_exception(id_)
             t.last_message = last_message
             self.session.commit()
-        except:
+        except Exception:
             self.session.rollback()
             raise
 
@@ -577,9 +574,10 @@ class TransactionDB:
         exist or the role doesn't exist.
         """
         try:
-            user_role = self.session.query(UserRole).filter_by(user_id=user_id)\
-                                                    .filter_by(role_id=role_id)\
-                                                    .first()
+            user_role = (self.session.query(UserRole)
+                         .filter_by(user_id=user_id)
+                         .filter_by(role_id=role_id)
+                         .first())
             if user_role:
                 raise TransactionDBException(("The role is already assigned"
                                               " to this user."))
@@ -609,9 +607,10 @@ class TransactionDB:
         didn't exist in the first place.
         """
         try:
-            user_role = self.session.query(UserRole).filter_by(user_id=user_id)\
-                                                    .filter_by(role_id=role_id)\
-                                                    .first()
+            user_role = (self.session.query(UserRole)
+                         .filter_by(user_id=user_id)
+                         .filter_by(role_id=role_id)
+                         .first())
             if not user_role:
                 raise TransactionDBException(("The role wasn't assigned"
                                               " to this user."))
@@ -670,8 +669,11 @@ class TransactionDB:
             self.session.rollback()
 
     @t_db_retry
-    def add_study_metadata(self, study_id: str, origin: str,
-                           c_move_time: datetime, overwrite: bool=False):
+    def add_study_metadata(self,
+                           study_id: str,
+                           origin: str,
+                           c_move_time: datetime,
+                           overwrite: bool = False):
         """Add metadata associated with a study sent to mdbrain.
         (mainly used by auto_pull systems).
         Throws TransactionDBException if metadata for this study was
