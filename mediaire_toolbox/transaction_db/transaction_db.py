@@ -76,14 +76,12 @@ def migrate(session, engine, db_version):
             raise e
     for version in range(
             from_schema_version + 1, TRANSACTIONS_DB_SCHEMA_VERSION + 1):
-        logger.warn(
-            "Started Database migration script to version {}....."
-            "DO NOT STOP PIPELINE".format(version))
+        logger.warning("Started Database migration script to version {}....."
+                       "DO NOT STOP PIPELINE".format(version))
         migrate_scripts(
             session, engine,
             from_schema_version, TRANSACTIONS_DB_SCHEMA_VERSION)
-        logger.warn(
-            "Finished migration script")
+        logger.warning("Finished migration script")
 
 
 def lock(func):
@@ -96,6 +94,28 @@ def lock(func):
         finally:
             self.lock.release()
     return wrapper
+
+
+def utcnow():
+    """Return _aware_ `datetime.now()` object in UTC timezone.
+
+    This function must be used to insert or update `datetime` fields in the
+    database, otherwise the validation `validate_utc` will reject the value.
+    """
+    # From the Python documentation:
+    # https://docs.python.org/3/library/datetime.html#datetime.datetime.utcnow
+    # datetime.utcnow()
+    #   Return the current UTC date and time, with `tzinfo None`.
+    #   This is like `now()`, but returns the current UTC date and time, as a
+    #   naive `datetime` object. An aware current UTC datetime can be obtained
+    #   by calling `datetime.now(timezone.utc)`. See also `now()`.
+    #   Warning:
+    #     Because naive datetime objects are treated by many datetime methods
+    #     as local times, it is preferred to use aware datetimes to represent
+    #     times in UTC. As such, the recommended way to create an object
+    #     representing the current time in UTC is by calling
+    #     `datetime.now(timezone.utc)`.
+    return datetime.datetime.now(datetime.timezone.utc)
 
 
 class TransactionDB:
@@ -167,7 +187,7 @@ class TransactionDB:
 
             t.processing_state = processing_state
             if not t.creation_date:
-                t.creation_date = datetime.datetime.utcnow()
+                t.creation_date = utcnow()
             if product_id:
                 t.product_id = product_id
             if analysis_type:
@@ -325,7 +345,7 @@ class TransactionDB:
             t.task_progress = task_progress
             if not t.start_date:
                 # set start date first time transaction was set to processing
-                t.start_date = datetime.datetime.utcnow()
+                t.start_date = utcnow()
             self.session.commit()
         except Exception:
             self.session.rollback()
@@ -341,9 +361,9 @@ class TransactionDB:
             t.task_state = TaskState.failed
             if not t.start_date:
                 # set start date if doesnt exist
-                t.start_date = datetime.datetime.utcnow()
+                t.start_date = utcnow()
             if not t.end_date:
-                t.end_date = datetime.datetime.utcnow()
+                t.end_date = utcnow()
             t.error = cause
             self.session.commit()
         except Exception:
@@ -364,9 +384,9 @@ class TransactionDB:
                 t.status = 'unseen'
             if not t.start_date:
                 # set start date if doesnt exist
-                t.start_date = datetime.datetime.utcnow()
+                t.start_date = utcnow()
             if not t.end_date:
-                t.end_date = datetime.datetime.utcnow()
+                t.end_date = utcnow()
             if clear_error:
                 t.error = ''
             self.session.commit()

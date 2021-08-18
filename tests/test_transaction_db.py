@@ -13,7 +13,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.sql import sqltypes
 
-from mediaire_toolbox.transaction_db.transaction_db import TransactionDB
+from mediaire_toolbox.transaction_db.transaction_db import (TransactionDB,
+                                                            utcnow)
 from mediaire_toolbox.transaction_db.model import (
     TaskState, Transaction, UserTransaction, User, Role, UserRole,
     StudiesMetadata
@@ -72,18 +73,19 @@ class TestTransactionDB(unittest.TestCase):
         datetime_vars = ['start_date', 'end_date', 'data_uploaded']
         date_vars = ['birth_date']
         t = Transaction()
+        test_datetime = datetime(2020, 2, 1, 18, 30, 4, tzinfo=timezone.utc)
         for key in datetime_vars:
-            setattr(t, key, datetime(2020, 2, 1, 18, 30, 4))
+            setattr(t, key, test_datetime)
         for key in date_vars:
             setattr(t, key, datetime(2020, 2, 1))
 
         t_r = Transaction().read_dict(t.to_dict())
         t_id = t_db.create_transaction(t_r)
         t_r_from_db = t_db.get_transaction(t_id)
-        self.assertEqual(
-            datetime(2020, 2, 1, 18, 30, 4), t_r_from_db.start_date)
-        self.assertEqual(
-            datetime(2020, 2, 1, 18, 30, 4), t_r_from_db.end_date)
+        self.assertEqual(test_datetime.replace(tzinfo=None),
+                         t_r_from_db.start_date)
+        self.assertEqual(test_datetime.replace(tzinfo=None),
+                         t_r_from_db.end_date)
         self.assertEqual(date(2020, 2, 1), t_r_from_db.birth_date)
 
     def test_read_dict_task_state(self):
@@ -305,14 +307,14 @@ class TestTransactionDB(unittest.TestCase):
         self.assertFalse(t_db.peek_queued('non_wait'))
 
         t = t_db.peek_queued('wait')
-        self.assertEquals(t.transaction_id, t_id_1)
+        self.assertEqual(t.transaction_id, t_id_1)
         t = t_db.peek_queued('wait')
-        self.assertEquals(t.transaction_id, t_id_1)
+        self.assertEqual(t.transaction_id, t_id_1)
 
         t_db.set_processing(t_id_1, 'spm', '', 50)
 
         t = t_db.peek_queued('wait')
-        self.assertEquals(t.transaction_id, t_id_2)
+        self.assertEqual(t.transaction_id, t_id_2)
 
         t_db.close()
 
@@ -460,8 +462,8 @@ class TestTransactionDB(unittest.TestCase):
     def test_json_serialization(self):
         t = self._get_test_transaction()
         t.task_state = TaskState.completed
-        t.start_date = datetime.utcnow()
-        t.end_date = datetime.utcnow()
+        t.start_date = utcnow()
+        t.end_date = utcnow()
         print(t.to_dict()['task_state'])
         print(t.to_dict()['task_state'] == 'completed')
         self.assertTrue(t.to_dict()['task_state'] == 'completed')
@@ -762,7 +764,7 @@ class TestTransactionDB(unittest.TestCase):
         engine = temp_db.get_temp_db()
         t_db = TransactionDB(engine)
 
-        t_db.add_study_metadata('s1', 'dicom_grazer', datetime.utcnow())
+        t_db.add_study_metadata('s1', 'dicom_grazer', utcnow())
         md = t_db.get_study_metadata('s1')
 
         self.assertEqual('dicom_grazer', md.origin)
@@ -776,15 +778,15 @@ class TestTransactionDB(unittest.TestCase):
         engine = temp_db.get_temp_db()
         t_db = TransactionDB(engine)
 
-        t_db.add_study_metadata('s1', 'dicom_grazer', datetime.utcnow())
-        t_db.add_study_metadata('s1', 'longitudinal_grazer', datetime.utcnow())
+        t_db.add_study_metadata('s1', 'dicom_grazer', utcnow())
+        t_db.add_study_metadata('s1', 'longitudinal_grazer', utcnow())
 
     def test_study_metadata_mutable(self):
         engine = temp_db.get_temp_db()
         t_db = TransactionDB(engine)
 
-        t_db.add_study_metadata('s1', 'dicom_grazer', datetime.utcnow())
-        t_db.add_study_metadata('s1', 'longitudinal_grazer', datetime.utcnow(),
+        t_db.add_study_metadata('s1', 'dicom_grazer', utcnow())
+        t_db.add_study_metadata('s1', 'longitudinal_grazer', utcnow(),
                                 overwrite=True)
 
         md = t_db.get_study_metadata('s1')
@@ -794,7 +796,7 @@ class TestTransactionDB(unittest.TestCase):
     def test_study_metadata_to_dict(self):
         md = StudiesMetadata()
         md.origin = 'dicom_grazer'
-        md.c_move_time = datetime.utcnow()
+        md.c_move_time = utcnow()
         md.study_id = 's1'
 
         self.assertEqual({
@@ -811,8 +813,7 @@ class TestTransactionDB(unittest.TestCase):
             for column in row.__table__.columns:
                 if type(column.type) != sqltypes.DateTime:
                     continue
-                with self.subTest(table=TableClass, column=column):
-                    print(column)
+                with self.subTest(column=str(column)):
                     setattr(row, column.name, datetime.now(timezone.utc))
 
     def test_datetime_utc_validation_reject(self):
@@ -823,8 +824,10 @@ class TestTransactionDB(unittest.TestCase):
             for column in row.__table__.columns:
                 if type(column.type) != sqltypes.DateTime:
                     continue
-                with self.subTest(table=TableClass, column=column):
-                    print(column)
+                with self.subTest(column=str(column)):
                     with self.assertRaises(ValueError):
                         setattr(row, column.name, datetime.now())
 
+    def test_utcnow(self):
+        """Checks that `utcnow()` returns aware object in UTC"""
+        self.assertEqual(utcnow().tzinfo, timezone.utc)

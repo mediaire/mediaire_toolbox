@@ -1,3 +1,4 @@
+from typing import Optional
 import datetime
 
 from sqlalchemy import (
@@ -14,8 +15,8 @@ Base = declarative_base()
 
 
 def validate_utc(key, datetime_obj):
-    """Only accepts `datetime_obj` in UTC for `key`."""
-    if datetime_obj.tzinfo != datetime.timezone.utc:
+    """Only accepts `datetime_obj` in UTC or `None` for `key`."""
+    if datetime_obj and datetime_obj.tzinfo != datetime.timezone.utc:
         raise ValueError("{} only accepts UTC values".format(key))
     return datetime_obj
 
@@ -113,21 +114,20 @@ class Transaction(Base):
     priority = Column(Integer, default=0)
 
     @staticmethod
-    def _datetime_to_str(dt):
-        return (
-            dt.strftime("%Y-%m-%d %H:%M:%S") if dt else None
-        )
+    def _datetime_to_str(dt: Optional[datetime.datetime]):
+        return dt.strftime("%Y-%m-%d %H:%M:%S") if dt else None
 
     @staticmethod
-    def _str_to_datetime(str_):
-        return (
-            datetime.datetime.strptime(str_, "%Y-%m-%d %H:%M:%S")
-            if str_ else None
-        )
+    def _str_to_datetime(str_: Optional[str]):
+        if str_:
+            dt = datetime.datetime.strptime(str_, "%Y-%m-%d %H:%M:%S")
+            return dt.replace(tzinfo=datetime.timezone.utc)
+        else:
+            return None
 
     @validates('start_date', 'end_date', 'creation_date', 'data_uploaded')
     def validate_utc(self, key, datetime_obj):
-        validate_utc(key, datetime_obj)
+        return validate_utc(key, datetime_obj)
 
     def to_dict(self):
         return {
@@ -229,7 +229,7 @@ class StudiesMetadata(Base):
 
     @validates('c_move_time')
     def validate_utc(self, key, datetime_obj):
-        validate_utc(key, datetime_obj)
+        return validate_utc(key, datetime_obj)
 
     def to_dict(self):
         return {'study_id': self.study_id,
@@ -255,7 +255,7 @@ class User(Base):
 
     @validates('added')
     def validate_utc(self, key, datetime_obj):
-        validate_utc(key, datetime_obj)
+        return validate_utc(key, datetime_obj)
 
     @staticmethod
     def password_hash(password):
@@ -292,7 +292,7 @@ class UserTransaction(Base):
 
     @validates()
     def validate_utc(self, key, datetime_obj):
-        validate_utc(key, datetime_obj)
+        return validate_utc(key, datetime_obj)
 
     def to_dict(self):
         return {'user_id': self.user_id,
@@ -317,7 +317,7 @@ class UserRole(Base):
 
     @validates()
     def validate_utc(self, key, datetime_obj):
-        validate_utc(key, datetime_obj)
+        return validate_utc(key, datetime_obj)
 
     def to_dict(self):
         return {'user_id': self.user_id,
@@ -341,7 +341,7 @@ class UserPreferences(Base):
 
     @validates()
     def validate_utc(self, key, datetime_obj):
-        validate_utc(key, datetime_obj)
+        return validate_utc(key, datetime_obj)
 
     def to_dict(self):
         return {'user_id': self.user_id,
@@ -368,7 +368,7 @@ class Role(Base):
 
     @validates()
     def validate_utc(self, key, datetime_obj):
-        validate_utc(key, datetime_obj)
+        return validate_utc(key, datetime_obj)
 
     def to_dict(self):
         return {'role_id': self.user_id}
@@ -389,7 +389,7 @@ class SchemaVersion(Base):
 
     @validates()
     def validate_utc(self, key, datetime_obj):
-        validate_utc(key, datetime_obj)
+        return validate_utc(key, datetime_obj)
 
 
 def create_all(engine):
