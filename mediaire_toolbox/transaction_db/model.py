@@ -1,14 +1,24 @@
+from typing import Optional
 import datetime
 
-from sqlalchemy import Column, Integer, String, Sequence, DateTime, Date, Enum, \
-    ForeignKey
+from sqlalchemy import (
+    Column, Integer, String, Sequence, DateTime, Date, Enum, ForeignKey
+)
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import validates
 from passlib.apps import custom_app_context as pwd_context
 
 from mediaire_toolbox.task_state import TaskState
 from mediaire_toolbox import constants
 
 Base = declarative_base()
+
+
+def validate_utc(key, datetime_obj):
+    """Only accepts `datetime_obj` in UTC or `None` for `key`."""
+    if datetime_obj and datetime_obj.tzinfo != datetime.timezone.utc:
+        raise ValueError("{} only accepts UTC values".format(key))
+    return datetime_obj
 
 
 # TODO Change to a dataclass when moving to Python 3.7
@@ -104,17 +114,20 @@ class Transaction(Base):
     priority = Column(Integer, default=0)
 
     @staticmethod
-    def _datetime_to_str(dt):
-        return (
-            dt.strftime("%Y-%m-%d %H:%M:%S") if dt else None
-        )
-        
+    def _datetime_to_str(dt: Optional[datetime.datetime]):
+        return dt.strftime("%Y-%m-%d %H:%M:%S") if dt else None
+
     @staticmethod
-    def _str_to_datetime(str_):
-        return (
-            datetime.datetime.strptime(str_, "%Y-%m-%d %H:%M:%S")
-            if str_ else None
-        )
+    def _str_to_datetime(str_: Optional[str]):
+        if str_:
+            dt = datetime.datetime.strptime(str_, "%Y-%m-%d %H:%M:%S")
+            return dt.replace(tzinfo=datetime.timezone.utc)
+        else:
+            return None
+
+    @validates('start_date', 'end_date', 'creation_date', 'data_uploaded')
+    def validate_utc(self, key, datetime_obj):
+        return validate_utc(key, datetime_obj)
 
     def to_dict(self):
         return {
@@ -195,8 +208,12 @@ class Transaction(Base):
         return self
 
     def __repr__(self):
-        return "<Transaction(transaction_id='%s', patient_id='%s', start_date='%s')>" % (
-            self.transaction_id, self.patient_id, self.start_date)
+        return ("<Transaction("
+                "transaction_id='{}',"
+                " patient_id='{}',"
+                " start_date='{}')>".format(self.transaction_id,
+                                            self.patient_id,
+                                            self.start_date))
 
 
 class StudiesMetadata(Base):
@@ -209,6 +226,10 @@ class StudiesMetadata(Base):
     origin = Column(String(255))
     # if auto_pull
     c_move_time = Column(DateTime())
+
+    @validates('c_move_time')
+    def validate_utc(self, key, datetime_obj):
+        return validate_utc(key, datetime_obj)
 
     def to_dict(self):
         return {'study_id': self.study_id,
@@ -227,7 +248,14 @@ class User(Base):
     name = Column(String(255), unique=True)
     hashed_password = Column(String(128))
     # Datetime the user was added
-    added = Column(DateTime(), default=datetime.datetime.utcnow)
+    added = Column(
+        DateTime(),
+        default=lambda: datetime.datetime.now(datetime.timezone.utc)
+    )
+
+    @validates('added')
+    def validate_utc(self, key, datetime_obj):
+        return validate_utc(key, datetime_obj)
 
     @staticmethod
     def password_hash(password):
@@ -254,7 +282,7 @@ class User(Base):
 
 class UserTransaction(Base):
 
-    """for multi-tenant pipelines, transactions might be associated with users"""
+    """for multi-tenant pipelines, transactions might be associated w/ users"""
     __tablename__ = 'users_transactions'
 
     user_id = Column(Integer, ForeignKey('users.id'),
