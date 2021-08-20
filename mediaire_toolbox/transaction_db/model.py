@@ -290,10 +290,6 @@ class UserTransaction(Base):
     transaction_id = Column(Integer, ForeignKey('transactions.transaction_id'),
                             primary_key=True)
 
-    @validates()
-    def validate_utc(self, key, datetime_obj):
-        return validate_utc(key, datetime_obj)
-
     def to_dict(self):
         return {'user_id': self.user_id,
                 'transaction_id': self.transaction_id}
@@ -315,10 +311,6 @@ class UserRole(Base):
     role_id = Column(String(64), ForeignKey('roles.role_id'),
                      primary_key=True)
 
-    @validates()
-    def validate_utc(self, key, datetime_obj):
-        return validate_utc(key, datetime_obj)
-
     def to_dict(self):
         return {'user_id': self.user_id,
                 'role_id': self.role_id}
@@ -338,10 +330,6 @@ class UserPreferences(Base):
     user_id = Column(Integer, ForeignKey('users.id'),
                      primary_key=True)
     report_language = Column(String(255))
-
-    @validates()
-    def validate_utc(self, key, datetime_obj):
-        return validate_utc(key, datetime_obj)
 
     def to_dict(self):
         return {'user_id': self.user_id,
@@ -366,10 +354,6 @@ class Role(Base):
     # encoded permissions for this role, 1 bit for each
     permissions = Column(Integer)
 
-    @validates()
-    def validate_utc(self, key, datetime_obj):
-        return validate_utc(key, datetime_obj)
-
     def to_dict(self):
         return {'role_id': self.user_id}
 
@@ -386,10 +370,6 @@ class SchemaVersion(Base):
                     default=constants.TRANSACTIONS_DB_SCHEMA_NAME)
     schema_version = Column(Integer,
                             default=constants.TRANSACTIONS_DB_SCHEMA_VERSION)
-
-    @validates()
-    def validate_utc(self, key, datetime_obj):
-        return validate_utc(key, datetime_obj)
 
 
 def create_all(engine):
