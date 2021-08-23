@@ -54,8 +54,15 @@ class QueueDaemon(ABC):
         self.stopped = False
         self.processing_t_id = None
 
-        signal.signal(signal.SIGINT, self.exit_gracefully)
-        signal.signal(signal.SIGTERM, self.exit_gracefully)
+        try:
+            signal.signal(signal.SIGINT, self.exit_gracefully)
+            signal.signal(signal.SIGTERM, self.exit_gracefully)
+        except ValueError:
+            logger.warn('Catching ValueError from signal, are you using '
+                        'daemons outside of the main thread, and if so, '
+                        'do you know what you are doing?')
+            # (signal only works in main thread)
+            pass
 
     @abstractmethod
     def process_task(self, task):
