@@ -72,6 +72,9 @@ target/
 # pyenv
 .python-version
 
+# pip
+Pipfile*
+
 # celery beat schedule file
 celerybeat-schedule
 
@@ -109,6 +112,4 @@ data
 .idea/volume_mapper.iml
 .idea/workspace.xml
 .idea
-
-
 /.idea/vcs.xml
