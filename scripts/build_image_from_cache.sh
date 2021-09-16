@@ -17,11 +17,7 @@ IMAGE_BASE_NAME=${REGISTRY}/development/mdbrain/${PROJECT_NAME}
 CI_IMAGE_BASE_NAME=${REGISTRY}/ci/mdbrain/${PROJECT_NAME}
 
 # parse all stages from multistage dockerfile
-targets_string=$(grep -oE ' AS .*| as .*' Dockerfile)
-targets=()
-while read -r line; do
-   targets+=("${line:3}")
-done <<< "$targets_string"
+targets=($(grep -ioP '^FROM [^\s]+ AS\K [^\s]+$' Dockerfile))
 
 function pull (){
     target=${1}
