@@ -59,6 +59,13 @@ MIGRATIONS = {
     ],
     16: [
         "ALTER TABLE transactions ADD COLUMN priority INT DEFAULT 0"
+    ],
+    17: [
+        "CREATE TABLE IF NOT EXISTS sites (id INT PRIMARY KEY, name TEXT)",
+        "INSERT OR IGNORE INTO sites (id, name) VALUES (0, 'default')",
+        "ALTER TABLE transactions ADD COLUMN site_id INT DEFAULT 0",
+        "UPDATE transactions SET site_id = 0 WHERE site_id = NULL",
+        # TODO foreign key via backup table: www.sqlite.org/faq.html#q11
     ]
 }
 

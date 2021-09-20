@@ -5,11 +5,15 @@ import json
 import os
 
 from sqlalchemy import create_engine
+from sqlalchemy.schema import MetaData
 
 from mediaire_toolbox.transaction_db import migrations
-from mediaire_toolbox.transaction_db.transaction_db import TransactionDB
-from mediaire_toolbox.transaction_db.transaction_db import get_transaction_model
-from mediaire_toolbox.transaction_db.model import Transaction
+from mediaire_toolbox.transaction_db.transaction_db import (
+    TransactionDB,
+    get_transaction_model,
+    migrate
+)
+from mediaire_toolbox.transaction_db.model import Transaction, SchemaVersion
 
 
 class TestMigration(unittest.TestCase):
@@ -20,7 +24,9 @@ class TestMigration(unittest.TestCase):
 
     @classmethod
     def tearDownClass(self):
-        shutil.rmtree(self.temp_folder)
+        # TODO TODO
+        #shutil.rmtree(self.temp_folder)
+        pass
 
     def _get_temp_db(self, test_index):
         return create_engine('sqlite:///' +
@@ -229,3 +235,36 @@ class TestMigration(unittest.TestCase):
         self.assertTrue('mdbrain_ms:acceptable' in tr_2.qa_score)
         self.assertTrue('mdbrain_nd:good' in tr_2.qa_score)
         t_db.close()
+
+    # TODO
+    def test_MIGRATIONS_site_id_foreign_key(self):
+        "Test that transactions table is migrated with site_id foreign key."""
+        engine = self._get_temp_db(6)
+        t_db = TransactionDB(engine)
+        meta = MetaData()
+        session = t_db.session
+
+        #cols = Transaction.__table__.columns.keys()
+        #cols = filter(lambda c: c != 'site_id', cols)
+        #cols = ','.join(cols)
+        #session.execute(("CREATE TABLE transactions_backup"
+        #                 "  ({});").format(cols))
+        #session.execute(("INSERT INTO transactions_backup SELECT"
+        #                 "  {}"
+        #                 "  FROM transactions;").format(cols))
+        #session.execute("DROP TABLE transactions;")
+        #session.execute(("ALTER TABLE transactions_backup"
+        #                 "  RENAME TO transactions;"))
+        #session.execute("DROP TABLE sites;")
+        #session.commit()
+        schema = SchemaVersion(schema_version=16)
+
+        #migrate(session, engine, schema)
+        meta.reflect(bind=engine)
+
+        # https://stackoverflow.com/a/54029747/894166
+        self.assertIn('sites.id',
+                      [e.target_fullname
+                       for e in meta.tables['transactions'].foreign_keys])
+
+        self.fail()
