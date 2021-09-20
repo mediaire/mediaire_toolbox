@@ -233,12 +233,12 @@ class TransactionDB:
     @lock
     def get_transaction(self, id_: int) -> Transaction:
         try:
-            return self._get_transaction_or_raise_exception(id_)
-        finally:
-            # we should always complete the lifetime of the connection,
-            # otherwise we might run into timeout errors
-            # (see https://docs.sqlalchemy.org/en/latest/orm/session_transaction.html)  # noqa: 501
+            t = self._get_transaction_or_raise_exception(id_)
             self.session.commit()
+            return t
+        except Exception:
+            self.session.rollback()
+            raise
 
     def _get_transaction_or_raise_exception(self, id_: int):
         t = self.session.query(Transaction).get(id_)
@@ -720,8 +720,9 @@ class TransactionDB:
         try:
             return self.session.query(StudiesMetadata)\
                 .filter_by(study_id=study_id).first()
-        finally:
             self.session.commit()
+        except Exception:
+            self.session.rollback()
 
     def close(self):
         self.session.close()
