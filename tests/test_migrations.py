@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 import tempfile
 import shutil
 import json
@@ -11,9 +12,8 @@ from mediaire_toolbox.transaction_db import migrations
 from mediaire_toolbox.transaction_db.transaction_db import (
     TransactionDB,
     get_transaction_model,
-    migrate
 )
-from mediaire_toolbox.transaction_db.model import Transaction, SchemaVersion
+from mediaire_toolbox.transaction_db.model import Transaction
 
 
 class TestMigration(unittest.TestCase):
@@ -24,8 +24,6 @@ class TestMigration(unittest.TestCase):
 
     @classmethod
     def tearDownClass(self):
-        # TODO TODO
-        #shutil.rmtree(self.temp_folder)
         pass
 
     def _get_temp_db(self, test_index):
@@ -236,35 +234,29 @@ class TestMigration(unittest.TestCase):
         self.assertTrue('mdbrain_nd:good' in tr_2.qa_score)
         t_db.close()
 
-    # TODO
-    def test_MIGRATIONS_site_id_foreign_key(self):
+    def test_migrations_site_id_foreign_key(self):
         "Test that transactions table is migrated with site_id foreign key."""
-        engine = self._get_temp_db(6)
-        t_db = TransactionDB(engine)
-        meta = MetaData()
-        session = t_db.session
+        temp_folder = tempfile.mkdtemp(suffix='_test_migrations_site_id')
+        self.addCleanup(shutil.rmtree, temp_folder)
+        temp_db_path = os.path.join(temp_folder, 't_v1.db')
+        shutil.copy('tests/fixtures/t_v1.db', temp_db_path)
+        engine = create_engine('sqlite:///' + temp_db_path)
 
-        #cols = Transaction.__table__.columns.keys()
-        #cols = filter(lambda c: c != 'site_id', cols)
-        #cols = ','.join(cols)
-        #session.execute(("CREATE TABLE transactions_backup"
-        #                 "  ({});").format(cols))
-        #session.execute(("INSERT INTO transactions_backup SELECT"
-        #                 "  {}"
-        #                 "  FROM transactions;").format(cols))
-        #session.execute("DROP TABLE transactions;")
-        #session.execute(("ALTER TABLE transactions_backup"
-        #                 "  RENAME TO transactions;"))
-        #session.execute("DROP TABLE sites;")
-        #session.commit()
-        schema = SchemaVersion(schema_version=16)
-
-        #migrate(session, engine, schema)
-        meta.reflect(bind=engine)
+        with patch('mediaire_toolbox.constants.TRANSACTIONS_DB_SCHEMA_VERSION',
+                   return_value=16):
+            # should execute all migrations code
+            t_db = TransactionDB(engine,
+                                 create_db=True,
+                                 db_file_path=temp_db_path)
+        t = Transaction()
+        t_id = t_db.create_transaction(t)
 
         # https://stackoverflow.com/a/54029747/894166
+        meta = MetaData()
+        session = t_db.session
+        meta.reflect(bind=engine)
         self.assertIn('sites.id',
                       [e.target_fullname
                        for e in meta.tables['transactions'].foreign_keys])
-
-        self.fail()
+        new_t = t_db.get_transaction(t_id)
+        self.assertEqual(new_t.site_id, 0)

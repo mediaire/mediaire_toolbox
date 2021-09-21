@@ -849,6 +849,5 @@ class TestTransactionDB(unittest.TestCase):
         tr_default_created = t_db.get_transaction(t_id_default)
         tr_extra_created = t_db.get_transaction(t_id_extra)
 
-        # TODO check site names?
         self.assertEqual(tr_default_created.site_id, tr_default.site_id)
         self.assertEqual(tr_extra_created.site_id, tr_extra.site_id)

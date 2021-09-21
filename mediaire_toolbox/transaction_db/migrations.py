@@ -63,9 +63,80 @@ MIGRATIONS = {
     17: [
         "CREATE TABLE IF NOT EXISTS sites (id INT PRIMARY KEY, name TEXT)",
         "INSERT OR IGNORE INTO sites (id, name) VALUES (0, 'default')",
-        "ALTER TABLE transactions ADD COLUMN site_id INT DEFAULT 0",
+        # FOREIGN KEY column needs to be created via temporary table due to
+        # sqlite's limited ALTER TABLE support: www.sqlite.org/faq.html#q11
+        ("CREATE TEMPORARY TABLE transactions_backup ("
+         "  transaction_id INTEGER NOT NULL PRIMARY KEY,"
+         "  study_id VARCHAR(256),"
+         "  patient_id VARCHAR(128),"
+         "  name VARCHAR(64),"
+         "  birth_date DATE,"
+         "  start_date DATETIME,"
+         "  end_date DATETIME,"
+         "  task_state VARCHAR(10),"
+         "  processing_state VARCHAR(64),"
+         "  last_message VARCHAR,"
+         "  error VARCHAR,"
+         "  task_progress INT DEFAULT 0,"
+         "  task_skipped INT DEFAULT 0,"
+         "  task_cancelled INT DEFAULT 0,"
+         "  status TEXT,"
+         "  institution TEXT,"
+         "  sequences TEXT,"
+         "  archived INT DEFAULT 0,"
+         "  study_date TEXT,"
+         "  patient_consent INT DEFAULT 0,"
+         "  product_id INT DEFAULT 1,"
+         "  data_uploaded DATETIME,"
+         "  creation_date DATETIME,"
+         "  billable TEXT,"
+         "  version VARCHAR(31),"
+         "  analysis_type VARCHAR(31),"
+         "  qa_score VARCHAR(31),"
+         "  priority INT DEFAULT 0"
+         ");"),
+        "INSERT INTO transactions_backup SELECT * FROM transactions;",
+        "DROP TABLE transactions;",
+        ("CREATE TABLE transactions ("
+         "  transaction_id INTEGER NOT NULL PRIMARY KEY,"
+         "  study_id VARCHAR(256),"
+         "  patient_id VARCHAR(128),"
+         "  name VARCHAR(64),"
+         "  birth_date DATE,"
+         "  start_date DATETIME,"
+         "  end_date DATETIME,"
+         "  task_state VARCHAR(10),"
+         "  processing_state VARCHAR(64),"
+         "  last_message VARCHAR,"
+         "  error VARCHAR,"
+         "  task_progress INT DEFAULT 0,"
+         "  task_skipped INT DEFAULT 0,"
+         "  task_cancelled INT DEFAULT 0,"
+         "  status TEXT,"
+         "  institution TEXT,"
+         "  sequences TEXT,"
+         "  archived INT DEFAULT 0,"
+         "  study_date TEXT,"
+         "  patient_consent INT DEFAULT 0,"
+         "  product_id INT DEFAULT 1,"
+         "  data_uploaded DATETIME,"
+         "  creation_date DATETIME,"
+         "  billable TEXT,"
+         "  version VARCHAR(31),"
+         "  analysis_type VARCHAR(31),"
+         "  qa_score VARCHAR(31),"
+         "  priority INT DEFAULT 0,"
+         "  site_id INT DEFAULT 0,"
+         "  "
+         "  FOREIGN KEY(site_id) REFERENCES sites(id)"
+         "  "
+         "  CONSTRAINT taskstate CHECK ("
+         "    task_state IN ('queued', 'processing', 'failed', 'completed')"
+         "  )"
+         ");"),
+        ("CREATE INDEX index_p_a_s_t ON"
+         " transactions(patient_id,analysis_type,study_date,transaction_id);"),
         "UPDATE transactions SET site_id = 0 WHERE site_id = NULL",
-        # TODO foreign key via backup table: www.sqlite.org/faq.html#q11
     ]
 }
 
