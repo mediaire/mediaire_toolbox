@@ -162,12 +162,14 @@ class TransactionDB:
 
     @t_db_retry
     @lock
-    def create_transaction(
-            self, t: Transaction,
-            user_id=None, product_id=None, analysis_type=None,
-            qa_score=None,
-            processing_state='waiting',
-            task_state='queued') -> int:
+    def create_transaction(self,
+                           t: Transaction,
+                           user_id=None,
+                           product_id=None,
+                           analysis_type=None,
+                           qa_score=None,
+                           processing_state='waiting',
+                           task_state='queued') -> int:
         """will set the provided transaction object as queued,
         add it to the DB and return the transaction id.
 

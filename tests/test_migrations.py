@@ -24,7 +24,7 @@ class TestMigration(unittest.TestCase):
 
     @classmethod
     def tearDownClass(self):
-        pass
+        shutil.rmtree(self.temp_folder)
 
     def _get_temp_db(self, test_index):
         return create_engine('sqlite:///' +
