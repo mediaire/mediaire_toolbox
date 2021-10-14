@@ -34,7 +34,9 @@ branch_name=$(git symbolic-ref -q HEAD)
 branch_name=${branch_name##refs/heads/}
 branch_name=${branch_name:-HEAD}
 if [ ! ${branch_name} == "master" ]; then
-    error_trap "Can only release when on master - current branch is ${branch_name}."    
+    if [ ! ${branch_name} == "main" ]; then
+        error_trap "Can only release when on master/main - current branch is ${branch_name}."
+    fi
 fi
 
 #
@@ -122,7 +124,10 @@ git submodule update
 git add ${VERSION_FILE} CHANGELOG.md || error_trap "Error issuing git add"
 git commit -m "Version ${new_version}, automatic version bump" || error_trap "Error issuing git commit"
 git tag ${new_version} || error_trap "Error issuing git tag"
-git push origin master || error_trap "Error issuing git push"
+
+echo "Running 'git push origin $branch_name'"
+
+git push origin $branch_name || error_trap "Error issuing git push"
 git push --tags || error_trap "Error issuing git push --tags"
 
 echo "All operations done."
