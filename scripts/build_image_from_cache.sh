@@ -12,9 +12,34 @@ TARGET=$4
 BUILD_ARGS=${5:-''}
 echo "Build args: $BUILD_ARGS"
 
-
-IMAGE_BASE_NAME=${REGISTRY}/development/mdbrain/${PROJECT_NAME}
-CI_IMAGE_BASE_NAME=${REGISTRY}/ci/mdbrain/${PROJECT_NAME}
+# Support both passing the full registry path or only passing the aws prefix
+# for legacy usage. If the image is from the mdbrain family, passing
+#
+#     build_image_from_cache.sh \
+#         task_manager \
+#         547766146644.dkr.ecr.eu-central-1.amazonaws.com \
+#         <tag> \
+#         <target>
+#
+# is fine. If it's from a different product family, passing
+#
+#     build_image_from_cache.sh \
+#         md_cloud_connector \
+#         547766146644.dkr.ecr.eu-central-1.amazonaws.com/development/md-cloud/ \
+#         <tag> \
+#         <target>
+#
+# works, too.
+#
+# don't quote regex: https://stackoverflow.com/a/56449915/894166
+if [[ $REGISTRY =~ /(certified|ci|development)/ ]]; then
+	IMAGE_BASE_NAME="${REGISTRY}${PROJECT_NAME}"
+	CI_IMAGE_BASE_NAME=$(echo "${REGISTRY}${PROJECT_NAME}" \
+	                     | sed 's!/\(certified\|development\)/!/ci/!')
+else
+	IMAGE_BASE_NAME="${REGISTRY}/development/mdbrain/${PROJECT_NAME}"
+	CI_IMAGE_BASE_NAME="${REGISTRY}/ci/mdbrain/${PROJECT_NAME}"
+fi
 
 # parse all stages from multistage dockerfile
 targets=($(grep -ioP '^FROM [^\s]+ AS\K [^\s]+$' Dockerfile))
