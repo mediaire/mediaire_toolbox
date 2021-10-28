@@ -26,11 +26,47 @@
 CHECKLIST="\
 Code Review Checklist
 ---------------------
-_Please acknowledge that you checked all items by reacting to this note with
-a :white_check_mark:_
 
-- [ ] Be nice
-- [ ] Find Bugs
+1. Avoid complexity, favor simpler solutions. Think about future
+   maintainability.
+   - Avoid smart and \"elegant\" one liners that are hard to read
+   - Be rather more explicit, even if it does require more lines of code. The
+      easier to read your code, the better! You and your fellow developers will
+      be grateful!
+   - Write code in a way that is easy to read even without comments, e.g. by
+      giving functions and variables meaningful names.
+   - Do however use comments where it improves understanding
+2. Split code into meaningful modules / classes / functions.
+   - When the code of your function spans over more than 30 lines, think about
+     splitting it up into smaller functions
+3. Reuse code whenever possible.
+   - Think carefully before you introduce another dependency (i.e. library) in
+     your code. In general, the less dependencies you have to handle, the
+     better! Try using the standard library if wherever possible.
+   - If you think about including a 3rd party library, check how mature it is
+     (is it actively maintained, is it stable or only an alpha release, how
+     many other people/companies are using it, are there enough tests ...)
+4. Write code in a way such that it is easy to reuse and unit test.
+   - A function should at best do only one thing
+   - A function ideally has no side effects
+5. Is there “enough” documentation in the code?
+   - Good code should be self-descriptive, but there are always places where a
+     small comment is needed. Short functions with clear names don’t always
+     need to be documented, but otherwise we try to document functions and
+     describe their parameters and return values.
+   - For Python: you can use type hinting when possible. This removes the need
+     of documenting the type of each parameter and return value.
+   - Does the documentation format follow our standard? For Python we use
+     [NumPy's ](ttps://numpydoc.readthedocs.io/en/latest/format.html).
+6. Is the code clear / simple enough?
+   - Good software is often more about avoiding complexity.
+7. Are there any DRYs which should be refactored?
+   - We try to avoid code repetition as it reduces future maintainability and
+     almost always makes the final code longer and more complex than it should
+     be.
+
+_Please acknowledge that you checked all items by reacting to this note with
+a :white_check_mark:._
 "
 
 VARIABLE_PREFIX=CI_CR_BOT_NOTE
