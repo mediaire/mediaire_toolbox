@@ -260,19 +260,35 @@ def get_certified_components(mdbrain_manager: Repo) -> set:
     return certified_components
 
 
-def get_component_versions(mdbrain_manager: Repo, version: str):
+def get_component_versions_manager(reference_repo: Repo, version: str):
     """Get {component: version} dict for mdbrain version :param:`version`."""
     try:
         ref = next(filter(lambda tag: str(tag).endswith(version),
-                          mdbrain_manager.tags))
+                          reference_repo.tags))
     except StopIteration:
         print_error(
-            f"Tag {version} not in {mdbrain_manager}, using HEAD instead")
-        ref = mdbrain_manager.head
+            f"Tag {version} not in {reference_repo}, using HEAD instead")
+        ref = reference_repo.head
 
     # TODO constant
     components_yaml = (ref.commit.tree
                        / 'etc' / 'mdbrain' / 'components.yml').data_stream
+    return {component: version_dict['version']
+            for component, version_dict
+            in yaml.safe_load(components_yaml.read())['components'].items()}
+
+
+def get_component_versions_orchestration(reference_repo: Repo, version: str):
+    """Get {component: version} dict for mdbrain version :param:`version`."""
+    if version == 'dev':
+        ref = reference_repo.heads.dev
+    else:
+        ref = next(filter(lambda tag: str(tag).endswith(version),
+                          reference_repo.tags))
+
+    # TODO constant
+    components_yaml = (ref.commit.tree
+                       / 'mdbrain' / 'config' / 'components.yml').data_stream
     return {component: version_dict['version']
             for component, version_dict
             in yaml.safe_load(components_yaml.read())['components'].items()}
@@ -286,6 +302,7 @@ def get_component_versions(mdbrain_manager: Repo, version: str):
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('prev_release', type=str,
                     help="Version number of previous release.")
+# TODO this will always look into container_orchestration 'dev' head
 parser.add_argument('new_release', type=str,
                     help="Version number of new release.")
 parser.add_argument('-g', '--git-root', default=os.getenv('HOME'),
@@ -313,11 +330,16 @@ args = parser.parse_args()
 
 
 # TODO constant
+# TODO apparently this is not enough to fetch all branches?
 mdbrain_manager = Repo(os.path.join(args.git_root, 'mdbrain_manager'))
 mdbrain_manager.remotes.origin.fetch()
+container_orchestration = Repo(os.path.join(args.git_root, 'container_orchestration'))
+container_orchestration.remotes.origin.fetch()
 
-prev_versions = get_component_versions(mdbrain_manager, args.prev_release)
-new_versions = get_component_versions(mdbrain_manager, args.new_release)
+prev_versions = get_component_versions_manager(mdbrain_manager,
+                                               args.prev_release)
+new_versions = get_component_versions_orchestration(container_orchestration,
+                                                    'dev')
 
 try:
     jira = JIRA(JIRA_URL, basic_auth=args.jira_auth)
