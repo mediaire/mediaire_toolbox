@@ -3,7 +3,8 @@
 Check that all commits between `prev_release` and `new_release` have an
 associated Epic with label `change_request`.
 
-Install dependencies: `python3 -m pip install GitPython jira pyYAML`.
+Install dependencies:
+`python3 -m pip install GitPython jira pyYAML python-gitlab`.
 
 CSV can be imported into GSheets/Excel.
 
@@ -15,13 +16,13 @@ import sys
 import os
 import re
 import importlib.util
-from collections import defaultdict
 
+import yaml
 from git import Repo
 from git.exc import GitError
 from jira import JIRA
 from jira.exceptions import JIRAError
-import yaml
+from gitlab import Gitlab
 
 
 # TODO to cli args?
@@ -32,40 +33,43 @@ JIRA_URL = 'https://mediaire.atlassian.net'
 JIRA_FIELD_EPIC_LINK = 'customfield_10014'
 JIRA_REQUIRED_LABEL = 'change_request'
 
+GITLAB_HOST = 'https://gitlab.com'
+
+GITLAB_PROJECT_STUBS = {
+    # MDSUITE_COMPONENTS
+    # 'anonymizer',
+    # 'dicom_grazer',
+    # 'dicom_sender',
+    # 'dicom_server',
+    # 'md_platform',
+    'suite_coordinator': 'dev-squad/suite_coordinator',
+    # MDBRAIN_COMPONENTS
+    'brain_segmentation': 'ml-squad/brain_segmentation',
+    # 'lesion_assessment',
+    # 'lesion_segmentation',
+    # 'longitudinal_assessment',
+    # 'longitudinal_grazer',
+    # 'report_worker',
+    # 'task_manager',
+    # 'volumetry_assessment',
+    'aneurysm_segmentation': 'ml-squad/aneurysm_segmentation',
+    'tumor_segmentation': 'ml-squad/tumor_segmentation',
+    # MDKNEE_COMPONENTS
+    'knee_task_manager': 'mdknee/knee_task_manager',
+    'mdknee_classifier': 'ml-squad/mdknee_classifier',
+    # MDSPINE_COMPONENTS
+    'spine_lesion_segmentation': 'md.spine/spine_lesion_segmentation',
+    'spine_report_worker': 'md.spine/spine_report_worker',
+    'spine_task_manager': 'md.spine/spine_task_manager',
+}
+
 
 def GITLAB_URL(component):
-    GITLAB_PROJECT_STUBS = {
-        # MDSUITE_COMPONENTS
-        # 'anonymizer',
-        # 'dicom_grazer',
-        # 'dicom_sender',
-        # 'dicom_server',
-        # 'md_platform',
-        'suite_coordinator': 'dev-squad/suite_coordinator',
-        # MDBRAIN_COMPONENTS
-        'brain_segmentation': 'ml-squad/brain_segmentation',
-        # 'lesion_assessment',
-        # 'lesion_segmentation',
-        # 'longitudinal_assessment',
-        # 'longitudinal_grazer',
-        # 'report_worker',
-        # 'task_manager',
-        # 'volumetry_assessment',
-        'aneurysm_segmentation': 'ml-squad/aneurysm_segmentation',
-        'tumor_segmentation': 'ml-squad/tumor_segmentation',
-        # MDKNEE_COMPONENTS
-        'knee_task_manager': 'mdknee/knee_task_manager',
-        'mdknee_classifier': 'ml-squad/mdknee_classifier',
-        # MDSPINE_COMPONENTS
-        'spine_lesion_segmentation': 'md.spine/spine_lesion_segmentation',
-        'spine_report_worker': 'md.spine/spine_report_worker',
-        'spine_task_manager': 'md.spine/spine_task_manager',
-    }
     component = GITLAB_PROJECT_STUBS.get(component, component)
-    return f'https://gitlab.com/mediaire/{component}'
+    return f'{GITLAB_HOST}/mediaire/{component}'
 
 
-def print_error(*args, **kwags):
+def print_error(*args, **kwargs):
     print(*args, **kwargs, file=sys.stderr)
 
 
@@ -73,7 +77,14 @@ def print_header(fmt, /, prev_release, new_release):
     if fmt == 'plain':
         pass
     elif fmt == 'csv':
-        print('"component","prev_version","new_version","commit","ticket","epic","msg"')
+        print('"component",'
+              '"prev_version",'
+              '"new_version",'
+              '"commit",'
+              '"merge_request",'
+              '"ticket",'
+              '"epic",'
+              '"msg"')
     elif fmt == 'html':
         print(f"""\
 <!doctype html>
@@ -93,8 +104,8 @@ def print_header(fmt, /, prev_release, new_release):
       border-bottom: 2px solid black;
       border-collapse: collapse;
     }}
-    td, th {{ 
-      padding: 0.6ex 5px 0.6ex 5px; 
+    td, th {{
+      padding: 0.6ex 5px 0.6ex 5px;
       text-align: left;
     }}
     tr:nth-child(2n) {{
@@ -120,6 +131,7 @@ def print_header(fmt, /, prev_release, new_release):
       <th>Previous Version</th>
       <th>New Version</th>
       <th>Commit</th>
+      <th>Merge Request</th>
       <th>Ticket</th>
       <th>Epic</th>
       <th>Message</th>
@@ -142,24 +154,44 @@ def print_section(fmt, /, component, prev_version, new_version):
         raise RuntimeError("Infalid format")
 
 
-def print_row(fmt, /, commit, ticket=None, epic=None, msg='', component=None, prev_version=None, new_version=None):
+def print_row(fmt,
+              /,
+              commit,
+              ticket=None,
+              epic=None,
+              msg='',
+              component=None,
+              prev_version=None,
+              new_version=None,
+              merge_request=None):
     if fmt == 'plain':
         ticket = ticket if ticket else '<no ticket>'
         epic = f'Epic:{epic}:"{epic.fields.summary}"' if epic else '<no epic>'
+        merge_request = (f'!{merge_request["iid"]}'
+                         if merge_request
+                         else '<no MR>')
         msg = f"[{msg}]" if msg else ''
-        row = f"  {commit}  {ticket}  {epic}  {msg}"
+        row = f"  {commit}  {merge_request}  {ticket}  {epic}  {msg}"
     elif fmt == 'csv':
         component = component if component else ''
         prev_version = prev_version if prev_version else ''
         new_version = new_version if new_version else ''
         ticket = ticket if ticket else ''
         epic = epic if epic else ''
+        merge_request = merge_request["iid"] if merge_request else ''
         msg = msg.replace('"', '""')
-        row = f'"{component}","{prev_version}","{new_version}","{commit}","{ticket}","{epic}","{msg}"'
+        row = (f'"{component}",'
+               f'"{prev_version}",'
+               f'"{new_version}",'
+               f'"{commit}",'
+               f'"{merge_request}",'
+               f'"{ticket}",'
+               f'"{epic}","{msg}"')
     elif fmt == 'html':
         component = component if component else ''
         prev_version = prev_version if prev_version else ''
         new_version = new_version if new_version else ''
+        merge_request = merge_request['iid'] if merge_request else ''
         ticket = ticket if ticket else ''
         epic = epic if epic else ''
         row = f"""\
@@ -168,11 +200,12 @@ def print_row(fmt, /, commit, ticket=None, epic=None, msg='', component=None, pr
     <td><a href="{GITLAB_URL(component)}/-/tags/{prev_version}">{prev_version}</a></td>
     <td><a href="{GITLAB_URL(component)}/-/tags/{new_version}">{new_version}</a></td>
     <td><a href="{GITLAB_URL(component)}/-/commit/{commit}"><code>{commit}</code></a></td>
+    <td><a href="{GITLAB_URL(component)}/-/merge_requests/{merge_request}">!{merge_request}</a></td>
     <td><a href="{JIRA_URL}/browse/{ticket}">{ticket}</a></td>
     <td><a href="{JIRA_URL}/browse/{ticket}">{epic}</a></td>
     <td>{msg}</td>
   </tr>\
-"""
+"""  # noqa: E501
     else:
         raise RuntimeError("Infalid format")
     print(row)
@@ -266,6 +299,13 @@ parser.add_argument(
          " https://id.atlassian.com/manage-profile/security/api-tokens."
          " Can also be set using environment variables by the same name."
 )
+parser.add_argument(
+    '-l', '--gitlab-auth', metavar='GITLAB_TOKEN',
+    default=os.getenv('GITLAB_TOKEN'),
+    help="Gitlab API authentication. Create a private token at"
+         " https://gitlab.com/-/profile/personal_access_tokens"
+         " Can also be set using environment variables by the same name."
+)
 args = parser.parse_args()
 
 
@@ -278,7 +318,8 @@ new_versions = get_component_versions(mdbrain_manager, args.new_release)
 
 try:
     jira = JIRA(JIRA_URL, basic_auth=args.jira_auth)
-except JIRAError as e:
+    gitlab = Gitlab(GITLAB_HOST, private_token=args.gitlab_auth)
+except JIRAError as e:  # TODO
     print_error("Authenticaiton Error:", e.text)
     sys.exit(1)
 
@@ -314,12 +355,32 @@ for component in sorted(get_certified_components(mdbrain_manager)):
             f'! tag "{prev_version}" or "{new_version}" not found in {repo}')
         continue
 
+    try:
+        gl_repo = gitlab.projects.get(
+            f'mediaire/{GITLAB_PROJECT_STUBS.get(component, component)}')
+    except Exception as e:  # TODO
+        print_error('! Gitlab error:', e)
+        continue
+
     for commit in repo.iter_commits(f'{prev_version}...{new_version}'):
-        tickets_in_commit_message = re.findall(TICKET_NAME_PATTERN,
-                                               commit.message)
-        if tickets_in_commit_message:
+        gl_commit = gl_repo.commits.get(commit.hexsha)
+        associated_merge_requests = gl_commit.merge_requests()
+        tickets_in_merge_requests = set(re.findall(
+            TICKET_NAME_PATTERN,
+            '\n'.join(mr['title'] for mr in associated_merge_requests)
+        ))
+        merge_request = (associated_merge_requests[0]
+                         if associated_merge_requests
+                         else None)
+
+        tickets_in_commit_message = set(re.findall(TICKET_NAME_PATTERN,
+                                                   commit.message))
+
+        associated_tickets = \
+            tickets_in_merge_requests | tickets_in_commit_message
+        if associated_tickets:
             # print(' ', commit.hexsha, *set(matches))
-            for ticket_id in set(tickets_in_commit_message):
+            for ticket_id in set(associated_tickets):
                 if has_change_request_label.get(ticket_id):
                     continue
 
@@ -344,6 +405,7 @@ for component in sorted(get_certified_components(mdbrain_manager)):
                               prev_version=prev_version,
                               new_version=new_version,
                               commit=commit.hexsha,
+                              merge_request=merge_request,
                               ticket=ticket_id,
                               epic=None,
                               msg='')
@@ -353,6 +415,7 @@ for component in sorted(get_certified_components(mdbrain_manager)):
                               prev_version=prev_version,
                               new_version=new_version,
                               commit=commit.hexsha,
+                              merge_request=merge_request,
                               ticket=ticket_id,
                               epic=epic,
                               msg=f'epic has no label "{JIRA_REQUIRED_LABEL}"')
@@ -362,6 +425,7 @@ for component in sorted(get_certified_components(mdbrain_manager)):
                               prev_version=prev_version,
                               new_version=new_version,
                               commit=commit.hexsha,
+                              merge_request=merge_request,
                               ticket=ticket_id,
                               epic=None,
                               msg=f'JIRA error: "{e.text}"')
@@ -374,6 +438,7 @@ for component in sorted(get_certified_components(mdbrain_manager)):
                       prev_version=prev_version,
                       new_version=new_version,
                       commit=commit.hexsha,
+                      merge_request=merge_request,
                       ticket=None,
                       epic=None,
                       msg=f'{commit_subject}')
