@@ -263,12 +263,15 @@ def get_certified_components(mdbrain_manager: Repo) -> set:
 def get_component_versions(mdbrain_manager: Repo, version: str):
     """Get {component: version} dict for mdbrain version :param:`version`."""
     try:
-        tag = next(filter(lambda tag: str(tag).endswith(version),
+        ref = next(filter(lambda tag: str(tag).endswith(version),
                           mdbrain_manager.tags))
     except StopIteration:
-        raise RuntimeError(f"Tag {version} not in {mdbrain_manager}")
+        print_error(
+            f"Tag {version} not in {mdbrain_manager}, using HEAD instead")
+        ref = mdbrain_manager.head
+
     # TODO constant
-    components_yaml = (tag.commit.tree
+    components_yaml = (ref.commit.tree
                        / 'etc' / 'mdbrain' / 'components.yml').data_stream
     return {component: version_dict['version']
             for component, version_dict
@@ -350,10 +353,15 @@ for component in sorted(get_certified_components(mdbrain_manager)):
         print_error('! git error:', e)
         continue
 
-    if prev_version not in repo.tags or new_version not in repo.tags:
+    if prev_version not in repo.tags:
         print_error(
             f'! tag "{prev_version}" or "{new_version}" not found in {repo}')
         continue
+    if new_version not in repo.tags:
+        print_error(
+            f'! tag "{prev_version}" or "{new_version}" not found in {repo}')
+        print_error('Using HEAD instead')
+        new_version = 'HEAD'
 
     try:
         gl_repo = gitlab.projects.get(
