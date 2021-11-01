@@ -333,7 +333,8 @@ args = parser.parse_args()
 # TODO apparently this is not enough to fetch all branches?
 mdbrain_manager = Repo(os.path.join(args.git_root, 'mdbrain_manager'))
 mdbrain_manager.remotes.origin.fetch()
-container_orchestration = Repo(os.path.join(args.git_root, 'container_orchestration'))
+container_orchestration = Repo(os.path.join(args.git_root,
+                                            'container_orchestration'))
 container_orchestration.remotes.origin.fetch()
 
 prev_versions = get_component_versions_manager(mdbrain_manager,
@@ -424,6 +425,10 @@ for component in sorted(get_certified_components(mdbrain_manager)):
                         continue
 
                     epic = jira.issue(epic_id)
+                    # TODO check "linked issues" for epics, as tickets from
+                    # other boards cannot be a sub-task in an epic in a
+                    # respective board. See
+                    # https://cadspinoff.slack.com/archives/C02HLSA8M7Y/p1635780954020800?thread_ts=1635750268.001000&cid=C02HLSA8M7Y  # noqa: E501
                     fix_versions = [fv.name for fv in epic.fields.fixVersions]
                     if JIRA_REQUIRED_LABEL not in epic.fields.labels:
                         raise ValueError(
