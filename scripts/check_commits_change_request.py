@@ -394,8 +394,14 @@ for component in sorted(get_certified_components(mdbrain_manager)):
                         continue
 
                     epic = jira.issue(epic_id)
+                    fix_versions = [fv.name for fv in epic.fields.fixVersions]
                     if JIRA_REQUIRED_LABEL not in epic.fields.labels:
-                        raise ValueError
+                        raise ValueError(
+                            f'epic has no label "{JIRA_REQUIRED_LABEL}"')
+                    elif args.new_release not in fix_versions:
+                        raise ValueError(
+                            f'epic "{JIRA_REQUIRED_LABEL}" has wrong version:'
+                            f' {fix_versions}')
                     else:
                         has_change_request_label[ticket_id] = True
                         has_change_request_label[epic_id] = True
@@ -409,7 +415,7 @@ for component in sorted(get_certified_components(mdbrain_manager)):
                               ticket=ticket_id,
                               epic=None,
                               msg='')
-                except ValueError:
+                except ValueError as e:
                     print_row(args.format,
                               component=component,
                               prev_version=prev_version,
@@ -418,7 +424,7 @@ for component in sorted(get_certified_components(mdbrain_manager)):
                               merge_request=merge_request,
                               ticket=ticket_id,
                               epic=epic,
-                              msg=f'epic has no label "{JIRA_REQUIRED_LABEL}"')
+                              msg=e)
                 except JIRAError as e:
                     print_row(args.format,
                               component=component,
