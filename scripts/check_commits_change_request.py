@@ -135,6 +135,7 @@ def print_header(fmt, /, prev_release, new_release):
         elem.innerText = "done";
       }}
     }}
+  </script>
 </head>
 <body>
 <table>
