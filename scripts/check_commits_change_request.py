@@ -90,6 +90,7 @@ def print_header(fmt, /, prev_release, new_release):
 <!doctype html>
 <html>
 <head>
+  <meta charset="UTF-8">
   <title>Missing Change Requests for {prev_release} → {new_release}</title>
   <style>
     body {{
@@ -122,6 +123,18 @@ def print_header(fmt, /, prev_release, new_release):
       text-decoration: none;
     }}
   </style>
+  <script>
+    function archive(elem) {{
+      td = elem.parentNode;
+      tr = td.parentNode;
+      if (elem.innerText === "done") {{
+        tr.style.opacity = "0.1";
+        elem.innerText = "todo";
+      }} else {{
+        tr.style.opacity = "1";
+        elem.innerText = "done";
+      }}
+    }}
 </head>
 <body>
 <table>
@@ -135,6 +148,7 @@ def print_header(fmt, /, prev_release, new_release):
       <th>Ticket</th>
       <th>Epic</th>
       <th>Message</th>
+      <th>Archive</th>
     <tr>
   </thead>
 """)
@@ -202,8 +216,9 @@ def print_row(fmt,
     <td><a href="{GITLAB_URL(component)}/-/commit/{commit}"><code>{commit}</code></a></td>
     <td><a href="{GITLAB_URL(component)}/-/merge_requests/{merge_request}">!{merge_request}</a></td>
     <td><a href="{JIRA_URL}/browse/{ticket}">{ticket}</a></td>
-    <td><a href="{JIRA_URL}/browse/{ticket}">{epic}</a></td>
+    <td><a href="{JIRA_URL}/browse/{epic}">{epic}</a></td>
     <td>{msg}</td>
+    <td><button onclick="archive(this);">done</button></</td>
   </tr>\
 """  # noqa: E501
     else:
