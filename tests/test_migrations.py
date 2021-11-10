@@ -234,6 +234,7 @@ class TestMigration(unittest.TestCase):
         self.assertTrue('mdbrain_nd:good' in tr_2.qa_score)
         t_db.close()
 
+    @unittest.skip("Feature removed, test kept for future re-introduction")
     def test_migrations_site_id_foreign_key(self):
         "Test that transactions table is migrated with site_id foreign key."""
         temp_folder = tempfile.mkdtemp(suffix='_test_migrations_site_id')

@@ -113,7 +113,7 @@ class Transaction(Base):
     # transactions are dequeued
     priority = Column(Integer, default=0)
     # multi-PACS site ID
-    site_id = Column(Integer, ForeignKey('sites.id'), default=0)
+    site_id = Column(Integer, default=0)
 
     @staticmethod
     def _datetime_to_str(dt: Optional[datetime.datetime]):
