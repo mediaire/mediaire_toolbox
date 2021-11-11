@@ -1,14 +1,18 @@
 import unittest
+from unittest.mock import patch
 import tempfile
 import shutil
 import json
 import os
 
 from sqlalchemy import create_engine
+from sqlalchemy.schema import MetaData
 
 from mediaire_toolbox.transaction_db import migrations
-from mediaire_toolbox.transaction_db.transaction_db import TransactionDB
-from mediaire_toolbox.transaction_db.transaction_db import get_transaction_model
+from mediaire_toolbox.transaction_db.transaction_db import (
+    TransactionDB,
+    get_transaction_model,
+)
 from mediaire_toolbox.transaction_db.model import Transaction
 
 
@@ -229,3 +233,31 @@ class TestMigration(unittest.TestCase):
         self.assertTrue('mdbrain_ms:acceptable' in tr_2.qa_score)
         self.assertTrue('mdbrain_nd:good' in tr_2.qa_score)
         t_db.close()
+
+    @unittest.skip("Feature removed, test kept for future re-introduction")
+    def test_migrations_site_id_foreign_key(self):
+        "Test that transactions table is migrated with site_id foreign key."""
+        temp_folder = tempfile.mkdtemp(suffix='_test_migrations_site_id')
+        self.addCleanup(shutil.rmtree, temp_folder)
+        temp_db_path = os.path.join(temp_folder, 't_v1.db')
+        shutil.copy('tests/fixtures/t_v1.db', temp_db_path)
+        engine = create_engine('sqlite:///' + temp_db_path)
+
+        with patch('mediaire_toolbox.constants.TRANSACTIONS_DB_SCHEMA_VERSION',
+                   return_value=16):
+            # should execute all migrations code
+            t_db = TransactionDB(engine,
+                                 create_db=True,
+                                 db_file_path=temp_db_path)
+        t = Transaction()
+        t_id = t_db.create_transaction(t)
+
+        # https://stackoverflow.com/a/54029747/894166
+        meta = MetaData()
+        session = t_db.session
+        meta.reflect(bind=engine)
+        self.assertIn('sites.id',
+                      [e.target_fullname
+                       for e in meta.tables['transactions'].foreign_keys])
+        new_t = t_db.get_transaction(t_id)
+        self.assertEqual(new_t.site_id, 0)

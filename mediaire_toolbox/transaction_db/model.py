@@ -112,6 +112,8 @@ class Transaction(Base):
     # priority -> integer number that can affect the order in which
     # transactions are dequeued
     priority = Column(Integer, default=0)
+    # multi-PACS site ID
+    site_id = Column(Integer, default=0)
 
     @staticmethod
     def _datetime_to_str(dt: Optional[datetime.datetime]):
@@ -163,7 +165,8 @@ class Transaction(Base):
 
             'data_uploaded': self._datetime_to_str(self.data_uploaded),
             'billable': self.billable,
-            'priority': self.priority
+            'priority': self.priority,
+            'site_id': self.site_id
         }
 
     def read_dict(self, d: dict):
@@ -204,6 +207,7 @@ class Transaction(Base):
         self.data_uploaded = self._str_to_datetime(d.get('data_uploaded'))
         self.billable = d.get('billable')
         self.priority = d.get('priority')
+        self.site_id = d.get('site_id')
 
         return self
 
@@ -360,6 +364,15 @@ class Role(Base):
     def read_dict(self, d: dict):
         self.role_id = d.get('role_id')
         return self
+
+
+class Site(Base):
+    """For multi-PACS installations"""
+
+    __tablename__ = 'sites'
+
+    id = Column(Integer(), primary_key=True)
+    name = Column(String())
 
 
 class SchemaVersion(Base):

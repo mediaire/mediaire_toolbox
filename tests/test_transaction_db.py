@@ -17,7 +17,7 @@ from mediaire_toolbox.transaction_db.transaction_db import (TransactionDB,
                                                             utcnow)
 from mediaire_toolbox.transaction_db.model import (
     TaskState, Transaction, UserTransaction, User, Role, UserRole,
-    StudiesMetadata
+    StudiesMetadata, Site
 )
 from mediaire_toolbox.transaction_db.exceptions import TransactionDBException
 
@@ -831,3 +831,23 @@ class TestTransactionDB(unittest.TestCase):
     def test_utcnow(self):
         """Checks that `utcnow()` returns aware object in UTC"""
         self.assertEqual(utcnow().tzinfo, timezone.utc)
+
+    def test_site_id(self):
+        """Test that transactions are associated with the correct site."""
+        engine = temp_db.get_temp_db()
+        site_default = Site(id=0, name='default')
+        site_extra = Site(id=1, name='extra')
+
+        tr_default = self._get_test_transaction()
+        tr_extra = self._get_test_transaction()
+        tr_extra.site_id = 1
+
+        t_db = TransactionDB(engine)
+        t_id_default = t_db.create_transaction(tr_default)
+        t_id_extra = t_db.create_transaction(tr_extra)
+
+        tr_default_created = t_db.get_transaction(t_id_default)
+        tr_extra_created = t_db.get_transaction(t_id_extra)
+
+        self.assertEqual(tr_default_created.site_id, tr_default.site_id)
+        self.assertEqual(tr_extra_created.site_id, tr_extra.site_id)

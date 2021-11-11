@@ -112,3 +112,5 @@ data
 
 
 /.idea/vcs.xml
+
+Pipfile*

@@ -59,6 +59,28 @@ MIGRATIONS = {
     ],
     16: [
         "ALTER TABLE transactions ADD COLUMN priority INT DEFAULT 0"
+    ],
+    17: [
+        "CREATE TABLE IF NOT EXISTS sites (id INT PRIMARY KEY, name TEXT);",
+        "INSERT OR IGNORE INTO sites (id, name) VALUES (0, 'default');",
+        # FOREIGN KEY column would need to be created via temporary table due
+        # to sqlite's limited ALTER TABLE support: www.sqlite.org/faq.html#q11
+        # so instead of doing a massive migration, we just ignore the formal
+        # relationship between the tables for now.
+        # "CREATE TEMPORARY TABLE transactions_backup (<full table def>);",
+        # "INSERT INTO transactions_backup SELECT * FROM transactions;",
+        # "DROP TABLE transactions;",
+        # ("CREATE TABLE transactions ("
+        #  "  <full table def>"
+        #  "  FOREIGN KEY(site_id) REFERENCES sites(id)"
+        #  "  CONSTRAINT taskstate CHECK ("
+        #  "    task_state IN ('queued', 'processing', 'failed', 'completed')"
+        #  "  )"
+        #  ");"),
+        # ("CREATE INDEX index_p_a_s_t ON"
+        #  " transactions(patient_id,analysis_type,study_date,transaction_id);"),
+        "ALTER TABLE transactions ADD COLUMN site_id INT;",
+        "UPDATE transactions SET site_id = 0 WHERE site_id = NULL;",
     ]
 }
 
