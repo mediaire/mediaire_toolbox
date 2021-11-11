@@ -643,12 +643,54 @@ class TransactionDB:
             self.session.rollback()
 
     @t_db_retry
-    def remove_user(self, user_id: int):
-        """Remove a user from the database"""
+    def get_user_roles(self, user_id):
+        try:
+            user_roles = self.session.query(UserRole).filter_by(
+                user_id=user_id)
+            return [user_role for user_role in user_roles]
+        finally:
+            self.session.commit()
+
+    @t_db_retry
+    def remove_user_roles(self, user_id):
+        try:
+            self.session.query(UserRole).filter_by(user_id=user_id).delete()
+            self.session.commit()
+        finally:
+            self.session.rollback()
+
+    @t_db_retry
+    def remove_user_preferences(self, user_id):
+        try:
+            self.session.query(UserPreferences).filter_by(
+                user_id=user_id).delete()
+            self.session.commit()
+        finally:
+            self.session.rollback()
+
+    @t_db_retry
+    def remove_user_transactions(self, user_id):
+        try:
+            self.session.query(UserTransaction).filter_by(
+                user_id=user_id).delete()
+            self.session.commit()
+        finally:
+            self.session.rollback()
+
+    @t_db_retry
+    def remove_user(self, user_id: int, cascade: bool = True):
+        """Remove a user from the database.
+        If cascade is True, remove every row in other tables referencing it
+        via a foreign key.
+        """
         try:
             user = self.session.query(User).get(user_id)
             if not user:
                 raise TransactionDBException("The user doesn't exist")
+            if cascade:
+                self.remove_user_roles(user_id)
+                self.remove_user_preferences(user_id)
+                self.remove_user_transactions(user_id)
             self.session.delete(user)
             self.session.commit()
         finally:
