@@ -16,7 +16,8 @@ from sqlalchemy.sql import sqltypes
 from mediaire_toolbox.transaction_db.transaction_db import (TransactionDB,
                                                             utcnow)
 from mediaire_toolbox.transaction_db.model import (
-    TaskState, Transaction, UserTransaction, User, Role, UserRole,
+    TaskState, Transaction, UserTransaction, User, UserPreferences, Role,
+    UserRole,
     StudiesMetadata, Site
 )
 from mediaire_toolbox.transaction_db.exceptions import TransactionDBException
@@ -608,16 +609,71 @@ class TestTransactionDB(unittest.TestCase):
         self.assertEqual('Pere', user.name)
         self.assertTrue(user.hashed_password)
 
-    def test_remove_user_ok(self):
-        """test that we can remove an existing user from the database"""
+    def test_get_user_roles_ok(self):
         engine = temp_db.get_temp_db()
         t_db = TransactionDB(engine)
         user_id = t_db.add_user('Pere', 'pwd')
+        t_db.add_role('spectator', 'read-only permissions', 1)
+        t_db.add_user_role(user_id, 'spectator')
+        t_db.add_role('mock', 'cannot do anything', 0)
+        t_db.add_user_role(user_id, 'mock')
+        user_roles = t_db.get_user_roles(user_id)
+        self.assertEqual({'spectator', 'mock'}, set(user_roles))
+
+    def test_get_user_transactions_ok(self):
+        engine = temp_db.get_temp_db()
+        t_db = TransactionDB(engine)
+        user_id = t_db.add_user('Pere', 'pwd')
+        linked_t_ids = t_db.get_user_transactions_ids(user_id)
+        linked_ts = t_db.get_user_transactions(user_id)
+        self.assertFalse(linked_t_ids)
+        self.assertFalse(linked_ts)
+
+        t_id = t_db.create_transaction(
+            Transaction(), user_id=user_id, product_id=1,
+            analysis_type='mdbrain_nd')
+        linked_t_ids = t_db.get_user_transactions_ids(user_id)
+        linked_ts = t_db.get_user_transactions(user_id)
+        self.assertEqual(linked_t_ids, [t_id])
+        self.assertEqual(linked_ts[0].transaction_id, t_id)
+
+    def test_remove_user_ok(self):
+        """test that we can remove an existing user and its corresponding
+        rows in linked tables from the database
+        """
+        engine = temp_db.get_temp_db()
+        t_db = TransactionDB(engine)
+        user_id = t_db.add_user('Pere', 'pwd')
+        t_db.add_role('spectator', 'read-only permissions', 1)
+        t_db.add_user_role(user_id, 'spectator')
+        t_db.set_user_preferences(user_id, {'report_language': 'de'})
         user = t_db.session.query(User).get(user_id)
         self.assertEqual('Pere', user.name)
         t_db.remove_user(user_id)
         user = t_db.session.query(User).get(user_id)
         self.assertFalse(user)
+        user_preferences = t_db.get_user_preferences(user_id)
+        self.assertFalse(user_preferences)
+        user_roles = t_db.get_user_roles(user_id)
+        self.assertFalse(user_roles)
+
+    def test_remove_user_ok_no_cascade(self):
+        """test that we can remove an existing user from the database"""
+        engine = temp_db.get_temp_db()
+        t_db = TransactionDB(engine)
+        user_id = t_db.add_user('Pere', 'pwd')
+        t_db.add_role('spectator', 'read-only permissions', 1)
+        t_db.add_user_role(user_id, 'spectator')
+        t_db.set_user_preferences(user_id, {'report_language': 'de'})
+        user = t_db.session.query(User).get(user_id)
+        self.assertEqual('Pere', user.name)
+        t_db.remove_user(user_id, cascade=False)
+        user = t_db.session.query(User).get(user_id)
+        self.assertFalse(user)
+        user_preferences = t_db.get_user_preferences(user_id)
+        self.assertEqual('de', user_preferences['report_language'])
+        user_roles = t_db.get_user_roles(user_id)
+        self.assertEqual(['spectator'], user_roles)
 
     @unittest.expectedFailure
     def test_add_user_already_exists(self):

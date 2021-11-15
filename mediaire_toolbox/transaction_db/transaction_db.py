@@ -12,7 +12,7 @@ from mediaire_toolbox.constants import (TRANSACTIONS_DB_SCHEMA_NAME,
                                         TRANSACTIONS_DB_SCHEMA_VERSION)
 from mediaire_toolbox.transaction_db.model import (
     Transaction, SchemaVersion, create_all, UserTransaction, User, Role,
-    UserRole, UserPreferences, StudiesMetadata
+    UserRole, UserPreferences, StudiesMetadata, UserNoCascade
 )
 from mediaire_toolbox.transaction_db.exceptions import TransactionDBException
 from mediaire_toolbox.transaction_db import migrations, index
@@ -523,6 +523,37 @@ class TransactionDB:
             raise
 
     @t_db_retry
+    @lock
+    def get_user_transactions(self, user_id: int):
+        try:
+            transactions = (
+                self.session.query(Transaction)
+                .join(UserTransaction,
+                      UserTransaction.transaction_id
+                      == Transaction.transaction_id)
+                .filter_by(user_id=user_id)
+                .all()
+            )
+            return transactions
+        except Exception:
+            self.session.commit()
+            raise
+
+    @t_db_retry
+    @lock
+    def get_user_transactions_ids(self, user_id: int):
+        try:
+            transactions_ids = (
+                self.session.query(UserTransaction.transaction_id)
+                .filter_by(user_id=user_id)
+                .all()
+            )
+            return [t_id for t_id, in transactions_ids]
+        except Exception:
+            self.session.commit()
+            raise
+
+    @t_db_retry
     def add_user(self, name, password):
         """For multi-tenant transaction DBs, add a new user to it.
 
@@ -643,10 +674,23 @@ class TransactionDB:
             self.session.rollback()
 
     @t_db_retry
-    def remove_user(self, user_id: int):
-        """Remove a user from the database"""
+    def get_user_roles(self, user_id):
         try:
-            user = self.session.query(User).get(user_id)
+            user_roles = self.session.query(UserRole).filter_by(
+                user_id=user_id)
+            return [user_role.role_id for user_role in user_roles]
+        finally:
+            self.session.commit()
+
+    @t_db_retry
+    def remove_user(self, user_id: int, cascade: bool = True):
+        """Remove a user from the database.
+        If cascade is True, remove every row in other tables referencing it
+        via a foreign key.
+        """
+        try:
+            user = self.session.query(
+                User if cascade else UserNoCascade).get(user_id)
             if not user:
                 raise TransactionDBException("The user doesn't exist")
             self.session.delete(user)
