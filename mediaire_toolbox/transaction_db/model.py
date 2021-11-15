@@ -5,7 +5,7 @@ from sqlalchemy import (
     Column, Integer, String, Sequence, DateTime, Date, Enum, ForeignKey
 )
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import validates
+from sqlalchemy.orm import validates, relationship
 from passlib.apps import custom_app_context as pwd_context
 
 from mediaire_toolbox.task_state import TaskState
@@ -241,7 +241,7 @@ class StudiesMetadata(Base):
                 'c_move_time': Transaction._datetime_to_str(self.c_move_time)}
 
 
-class User(Base):
+class UserNoCascade(Base):
 
     """for multi-tenant pipelines, users might be required"""
     __tablename__ = 'users'
@@ -282,6 +282,14 @@ class User(Base):
         self.added = datetime.datetime.strptime(
             added, "%Y-%m-%d %H:%M:%S") if added else None
         return self
+
+
+class User(UserNoCascade):
+    user_transaction = relationship("UserTransaction",
+                                    cascade="all", backref="parent")
+    user_role = relationship("UserRole", cascade="all", backref="parent")
+    user_preference = relationship("UserPreferences",
+                                   cascade="all", backref="parent")
 
 
 class UserTransaction(Base):

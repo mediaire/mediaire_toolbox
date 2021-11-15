@@ -618,8 +618,24 @@ class TestTransactionDB(unittest.TestCase):
         t_db.add_role('mock', 'cannot do anything', 0)
         t_db.add_user_role(user_id, 'mock')
         user_roles = t_db.get_user_roles(user_id)
-        role_ids = set([role.role_id for role in user_roles])
-        self.assertEqual({'spectator', 'mock'}, role_ids)
+        self.assertEqual({'spectator', 'mock'}, set(user_roles))
+
+    def test_get_user_transactions_ok(self):
+        engine = temp_db.get_temp_db()
+        t_db = TransactionDB(engine)
+        user_id = t_db.add_user('Pere', 'pwd')
+        linked_t_ids = t_db.get_user_transactions_ids(user_id)
+        linked_ts = t_db.get_user_transactions(user_id)
+        self.assertFalse(linked_t_ids)
+        self.assertFalse(linked_ts)
+
+        t_id = t_db.create_transaction(
+            Transaction(), user_id=user_id, product_id=1,
+            analysis_type='mdbrain_nd')
+        linked_t_ids = t_db.get_user_transactions_ids(user_id)
+        linked_ts = t_db.get_user_transactions(user_id)
+        self.assertEqual(linked_t_ids, [t_id])
+        self.assertEqual(linked_ts[0].transaction_id, t_id)
 
     def test_remove_user_ok(self):
         """test that we can remove an existing user and its corresponding
@@ -657,7 +673,7 @@ class TestTransactionDB(unittest.TestCase):
         user_preferences = t_db.get_user_preferences(user_id)
         self.assertEqual('de', user_preferences['report_language'])
         user_roles = t_db.get_user_roles(user_id)
-        self.assertEqual('spectator', user_roles[0].role_id)
+        self.assertEqual(['spectator'], user_roles)
 
     @unittest.expectedFailure
     def test_add_user_already_exists(self):
