@@ -30,6 +30,8 @@ class Transaction(Base):
     transaction_id = Column(Integer, Sequence(
         'transaction_id'), primary_key=True)
 
+    # multi-PACS site ID
+    site_id = Column(Integer, default=0, nullable=False)
     # study instance uid dicom tag
     study_id = Column(String(255))
     # patient id dicom tag
@@ -112,8 +114,6 @@ class Transaction(Base):
     # priority -> integer number that can affect the order in which
     # transactions are dequeued
     priority = Column(Integer, default=0)
-    # multi-PACS site ID
-    site_id = Column(Integer, default=0)
 
     @staticmethod
     def _datetime_to_str(dt: Optional[datetime.datetime]):
