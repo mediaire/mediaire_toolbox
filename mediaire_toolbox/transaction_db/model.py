@@ -207,7 +207,7 @@ class Transaction(Base):
         self.data_uploaded = self._str_to_datetime(d.get('data_uploaded'))
         self.billable = d.get('billable')
         self.priority = d.get('priority')
-        self.site_id = d.get('site_id')
+        self.site_id = d.get('site_id', 0)
 
         return self
 
