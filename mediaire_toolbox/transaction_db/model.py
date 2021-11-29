@@ -2,7 +2,8 @@ from typing import Optional
 import datetime
 
 from sqlalchemy import (
-    Column, Integer, String, Sequence, DateTime, Date, Enum, ForeignKey
+    Column, Integer, String, Sequence, DateTime, Date, Enum, ForeignKey,
+    TypeDecorator
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import validates
@@ -14,6 +15,28 @@ from mediaire_toolbox import constants
 Base = declarative_base()
 
 
+class TZDateTime(TypeDecorator):
+    """A sqlalchemy column type that enforces UTC on datetime objects.
+
+    Source: https://docs.sqlalchemy.org/en/12/core/custom_types.html#store-timezone-aware-timestamps-as-timezone-naive-utc
+    """  # noqa: E501
+    impl = DateTime
+
+    def process_bind_param(self, value, dialect):  # noqa: D
+        if value is not None:
+            if not value.tzinfo:
+                raise TypeError("tzinfo is required")
+            value = \
+                value.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+        return value
+
+    def process_result_value(self, value, dialect):  # noqa: D
+        if value is not None:
+            value = value.replace(tzinfo=datetime.timezone.utc)
+        return value
+
+
+# TODO replace with using TZDateTime type decorator
 def validate_utc(key, datetime_obj):
     """Only accepts `datetime_obj` in UTC or `None` for `key`."""
     if datetime_obj and datetime_obj.tzinfo != datetime.timezone.utc:
