@@ -17,7 +17,7 @@ from mediaire_toolbox.transaction_db.transaction_db import (TransactionDB,
                                                             utcnow)
 from mediaire_toolbox.transaction_db.model import (
     TaskState, Transaction, UserTransaction, User, Role, UserRole,
-    StudiesMetadata, Site
+    StudiesMetadata, Site, UserSite
 )
 from mediaire_toolbox.transaction_db.exceptions import TransactionDBException
 
@@ -851,3 +851,26 @@ class TestTransactionDB(unittest.TestCase):
 
         self.assertEqual(tr_default_created.site_id, tr_default.site_id)
         self.assertEqual(tr_extra_created.site_id, tr_extra.site_id)
+
+    def test_users_sites(self):
+        """Test that User <-> Site association works."""
+        engine = temp_db.get_temp_db()
+        t_db = TransactionDB(engine)
+
+        user_id = t_db.add_user('RaymondDamian', 'pwd')
+
+        site_default = Site(id=0, name='default')
+        t_db.session.add(site_default)
+
+        site_extra = Site(id=1, name='extra')
+        t_db.session.add(site_extra)
+
+        user_site = UserSite(user_id=user_id, site_id=site_default.id)
+        t_db.session.add(user_site)
+        t_db.session.commit()
+
+        users_sites = t_db.session.query(UserSite)
+        self.assertEqual(len(list(users_sites)), 1)
+        user_site = users_sites.first()
+        self.assertEqual(user_site.user_id, user_id)
+        self.assertEqual(user_site.site_id, site_default.id)

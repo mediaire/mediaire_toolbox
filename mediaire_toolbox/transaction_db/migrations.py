@@ -81,6 +81,15 @@ MIGRATIONS = {
         #  " transactions(patient_id,analysis_type,study_date,transaction_id);"),
         "ALTER TABLE transactions ADD COLUMN site_id INT;",
         "UPDATE transactions SET site_id = 0 WHERE site_id = NULL;",
+    ],
+    18: [
+        "CREATE TABLE IF NOT EXISTS users_sites ("
+	"  user_id INTEGER NOT NULL,"
+	"  site_id INTEGER NOT NULL,"
+	"  PRIMARY KEY (user_id, site_id),"
+	"  FOREIGN KEY (user_id) REFERENCES users(id),"
+	"  FOREIGN KEY (site_id) REFERENCES sites(id)"
+        ");"
     ]
 }
 
