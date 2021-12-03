@@ -84,11 +84,11 @@ MIGRATIONS = {
     ],
     18: [
         "CREATE TABLE IF NOT EXISTS users_sites ("
-	"  user_id INTEGER NOT NULL,"
-	"  site_id INTEGER NOT NULL,"
-	"  PRIMARY KEY (user_id, site_id),"
-	"  FOREIGN KEY (user_id) REFERENCES users(id),"
-	"  FOREIGN KEY (site_id) REFERENCES sites(id)"
+        "  user_id INTEGER NOT NULL,"
+        "  site_id INTEGER NOT NULL,"
+        "  PRIMARY KEY (user_id, site_id),"
+        "  FOREIGN KEY (user_id) REFERENCES users(id),"
+        "  FOREIGN KEY (site_id) REFERENCES sites(id)"
         ");"
     ]
 }
