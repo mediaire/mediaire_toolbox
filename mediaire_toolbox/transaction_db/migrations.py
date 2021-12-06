@@ -80,7 +80,7 @@ MIGRATIONS = {
         # ("CREATE INDEX index_p_a_s_t ON"
         #  " transactions(patient_id,analysis_type,study_date,transaction_id);"),
         "ALTER TABLE transactions ADD COLUMN site_id INT;",
-        "UPDATE transactions SET site_id = 0 WHERE site_id = NULL;",
+        "UPDATE transactions SET site_id = 0 WHERE site_id IS NULL;",
     ],
     18: [
         "CREATE TABLE IF NOT EXISTS users_sites ("
