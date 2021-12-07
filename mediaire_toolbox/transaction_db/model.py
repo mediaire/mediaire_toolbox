@@ -398,6 +398,20 @@ class Site(Base):
     name = Column(String())
 
 
+class UserSite(Base):
+    """Access control for multisite: Which User has access to which Sites.
+
+    "admins" are special users that have access to all sites. Their access
+    control is handled separately in the platform, circumventing this table.
+    This table is for unprivileged users only.
+    """
+
+    __tablename__ = 'users_sites'
+
+    user_id = Column(Integer(), ForeignKey('users.id'), primary_key=True)
+    site_id = Column(Integer(), ForeignKey('sites.id'), primary_key=True)
+
+
 class SchemaVersion(Base):
 
     __tablename__ = 'schema_version'

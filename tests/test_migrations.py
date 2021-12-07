@@ -261,3 +261,45 @@ class TestMigration(unittest.TestCase):
                        for e in meta.tables['transactions'].foreign_keys])
         new_t = t_db.get_transaction(t_id)
         self.assertEqual(new_t.site_id, 0)
+
+    def test_migrations_site_id_default(self):
+        "Test that transactions table is migrated with site_id foreign key."""
+        temp_folder = tempfile.mkdtemp(suffix='_test_migrations_site_id')
+        self.addCleanup(shutil.rmtree, temp_folder)
+        temp_db_path = os.path.join(temp_folder, 't_v1.db')
+        shutil.copy('tests/fixtures/t_v1.db', temp_db_path)
+        engine = create_engine('sqlite:///' + temp_db_path)
+        t_db = TransactionDB(engine, create_db=True, db_file_path=temp_db_path)
+
+        # check if all existing transactions were migrated successfully
+        for migrated_t in t_db.session.query(Transaction):
+            with self.subTest(t_id=migrated_t.transaction_id):
+                self.assertEqual(migrated_t.site_id, 0)
+
+        # check that newly created transactions are inserted w/ correct default
+        t_id_new = t_db.create_transaction(Transaction())
+        t_new = t_db.get_transaction(t_id_new)
+        self.assertEqual(t_new.site_id, 0)
+
+    def test_migrations_users_sites_foreign_keys(self):
+        "Test that transactions table is migrated with site_id foreign key."""
+        temp_folder = tempfile.mkdtemp(suffix='_test_migrations_site_id')
+        self.addCleanup(shutil.rmtree, temp_folder)
+        temp_db_path = os.path.join(temp_folder, 't_v1.db')
+        shutil.copy('tests/fixtures/t_v1.db', temp_db_path)
+        engine = create_engine('sqlite:///' + temp_db_path)
+
+        t_db = TransactionDB(engine,
+                             create_db=True,
+                             db_file_path=temp_db_path)
+
+        # https://stackoverflow.com/a/54029747/894166
+        meta = MetaData()
+        session = t_db.session
+        meta.reflect(bind=engine)
+
+        self.assertTrue(all(
+            foreign_key in [e.target_fullname
+                            for e in meta.tables['users_sites'].foreign_keys]
+            for foreign_key in ['users.id', 'sites.id']
+        ))
