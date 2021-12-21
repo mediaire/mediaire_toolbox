@@ -11,6 +11,30 @@ CSV can be imported into GSheets/Excel.
 HTML contains links to JIRA and GitLab pages.
 """
 
+# TODO
+# - refactor to always check a list of possible epics, keep a list of error
+#   messages and output all of them if no change_request epic is found among
+#   them make list from
+#   - self
+#   - JIRA_FIELD_EPIC_LINK
+#   - parent
+#   - blocked_linked_epics
+# - add ticket title to the output so it's easier to guess which change_request
+#   epic it shoudl be assoc'd with
+# - add js funcitonality to quickly apply a change_request epic block link
+#   - use jira api with js
+#   - pass jira token via url anchor, output in commandline
+#   - automatically get all change_request epics from the
+#     mdbrain-core/change_requests board
+#   - if that's too complicated, just output tsv list of epics to paste into
+#     jira maually
+#   - another way: use python and output cli call in html
+#   - use iframe to show jira ticket page and crop to issue links
+#     (https://stackoverflow.com/a/5676721/894166)
+# - group by tickets
+#   - UI for commits without tickets
+# - just go HTML only
+
 import argparse
 import sys
 import os
@@ -233,7 +257,7 @@ def print_footer(fmt):
     elif fmt == 'csv':
         pass
     elif fmt == 'html':
-        print("</table>\n</body>\n</html>", end="")
+        print("</table>\n</body>\n</html>")
     else:
         raise RuntimeError("Infalid format")
 
@@ -309,6 +333,26 @@ def get_component_versions_orchestration(reference_repo: Repo, version: str):
             for component, version_dict
             in yaml.safe_load(components_yaml.read())['components'].items()}
 
+
+def is_blocked_epic(issue_link) -> bool:
+    """Check if issue link outwoard blocks an epic."""
+    if not hasattr(issue_link, 'outwardIssue'):
+        return False
+    return (issue_link.outwardIssue.fields.issuetype.name == 'Epic'
+            and issue_link.type.outward == 'blocks')
+
+
+def get_parent_epic(issue):
+    """Get the parent epic of `issue`.
+
+    Different boards have different meta data formats.
+    """
+    return (
+        # DEV board
+        getattr(ticket.fields, JIRA_FIELD_EPIC_LINK, None)
+        # BS board
+        or getattr(getattr(ticket.fields, 'parent', None), 'key', None)
+    )
 
 # TODO refactor
 # split into funtions
@@ -433,30 +477,53 @@ for component in sorted(get_certified_components(mdbrain_manager)):
 
                 try:
                     ticket = jira.issue(ticket_id)
+                    try:
 
-                    epic_id = getattr(ticket.fields, JIRA_FIELD_EPIC_LINK)
-                    if epic_id is None:
-                        raise AttributeError
-                    elif has_change_request_label.get(epic_id):
-                        continue
+                        epic_id = get_parent_epic(ticket)
+                        if epic_id is None:
+                            raise AttributeError("has no epic")
+                        elif has_change_request_label.get(epic_id):
+                            continue
 
-                    epic = jira.issue(epic_id)
-                    # TODO check "linked issues" for epics, as tickets from
-                    # other boards cannot be a sub-task in an epic in a
-                    # respective board. See
-                    # https://cadspinoff.slack.com/archives/C02HLSA8M7Y/p1635780954020800?thread_ts=1635750268.001000&cid=C02HLSA8M7Y  # noqa: E501
-                    fix_versions = [fv.name for fv in epic.fields.fixVersions]
-                    if JIRA_REQUIRED_LABEL not in epic.fields.labels:
-                        raise ValueError(
-                            f'epic has no label "{JIRA_REQUIRED_LABEL}"')
-                    elif args.new_release not in fix_versions:
-                        raise ValueError(
-                            f'epic "{JIRA_REQUIRED_LABEL}" has wrong version:'
-                            f' {fix_versions}')
-                    else:
-                        has_change_request_label[ticket_id] = True
-                        has_change_request_label[epic_id] = True
-                except AttributeError:
+                        epic = jira.issue(epic_id)
+                        fix_versions = [fv.name for fv
+                                        in epic.fields.fixVersions]
+                        if JIRA_REQUIRED_LABEL not in epic.fields.labels:
+                            raise ValueError(
+                                f'epic has no label "{JIRA_REQUIRED_LABEL}"')
+                        elif args.new_release not in fix_versions:
+                            raise ValueError(
+                                f'epic "{JIRA_REQUIRED_LABEL}"'
+                                f' has wrong version: {fix_versions}')
+                        else:
+                            has_change_request_label[ticket_id] = True
+                            has_change_request_label[epic_id] = True
+                    except (AttributeError, ValueError) as main_epic_error:
+                        # The main epic did not provide a change request label
+                        # therefore look for blocked epics in the issue links
+                        # and check those
+                        has_change_request_label_in_linked_epic = False
+                        blocked_linked_epics = \
+                            filter(is_blocked_epic, ticket.fields.issuelinks)
+                        if not blocked_linked_epics:
+                            raise AttributeError(
+                                "has no epic and no blocked linked epics.")
+                        for link in blocked_linked_epics:
+                            epic_id = link.outwardIssue.key
+                            epic = jira.issue(epic_id)
+                            fix_versions = [fv.name for fv
+                                            in epic.fields.fixVersions]
+                            if (has_change_request_label.get(epic_id)
+                                    or (JIRA_REQUIRED_LABEL
+                                            in epic.fields.labels  # noqa: E127
+                                        and args.new_release in fix_versions)):
+                                has_change_request_label[epic_id] = True
+                                has_change_request_label_in_linked_epic = True
+
+                        if not has_change_request_label_in_linked_epic:
+                            raise main_epic_error
+
+                except AttributeError as e:
                     print_row(args.format,
                               component=component,
                               prev_version=prev_version,
@@ -465,7 +532,7 @@ for component in sorted(get_certified_components(mdbrain_manager)):
                               merge_request=merge_request,
                               ticket=ticket_id,
                               epic=None,
-                              msg='')
+                              msg=e)
                 except ValueError as e:
                     print_row(args.format,
                               component=component,
