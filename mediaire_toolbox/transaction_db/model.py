@@ -2,7 +2,8 @@ from typing import Optional
 import datetime
 
 from sqlalchemy import (
-    Column, Integer, String, Sequence, DateTime, Date, Enum, ForeignKey
+    Column, Integer, String, Sequence, DateTime, Date, Enum, ForeignKey,
+    TypeDecorator
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import validates
@@ -14,6 +15,28 @@ from mediaire_toolbox import constants
 Base = declarative_base()
 
 
+class TZDateTime(TypeDecorator):
+    """A sqlalchemy column type that enforces UTC on datetime objects.
+
+    Source: https://docs.sqlalchemy.org/en/12/core/custom_types.html#store-timezone-aware-timestamps-as-timezone-naive-utc
+    """  # noqa: E501
+    impl = DateTime
+
+    def process_bind_param(self, value, dialect):  # noqa: D
+        if value is not None:
+            if not value.tzinfo:
+                raise TypeError("tzinfo is required")
+            value = \
+                value.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+        return value
+
+    def process_result_value(self, value, dialect):  # noqa: D
+        if value is not None:
+            value = value.replace(tzinfo=datetime.timezone.utc)
+        return value
+
+
+# TODO replace with using TZDateTime type decorator
 def validate_utc(key, datetime_obj):
     """Only accepts `datetime_obj` in UTC or `None` for `key`."""
     if datetime_obj and datetime_obj.tzinfo != datetime.timezone.utc:
@@ -30,6 +53,8 @@ class Transaction(Base):
     transaction_id = Column(Integer, Sequence(
         'transaction_id'), primary_key=True)
 
+    # multi-PACS site ID
+    site_id = Column(Integer, default=0, nullable=False)
     # study instance uid dicom tag
     study_id = Column(String(255))
     # patient id dicom tag
@@ -163,7 +188,8 @@ class Transaction(Base):
 
             'data_uploaded': self._datetime_to_str(self.data_uploaded),
             'billable': self.billable,
-            'priority': self.priority
+            'priority': self.priority,
+            'site_id': self.site_id
         }
 
     def read_dict(self, d: dict):
@@ -204,6 +230,7 @@ class Transaction(Base):
         self.data_uploaded = self._str_to_datetime(d.get('data_uploaded'))
         self.billable = d.get('billable')
         self.priority = d.get('priority')
+        self.site_id = d.get('site_id', 0)
 
         return self
 
@@ -360,6 +387,29 @@ class Role(Base):
     def read_dict(self, d: dict):
         self.role_id = d.get('role_id')
         return self
+
+
+class Site(Base):
+    """For multi-PACS installations"""
+
+    __tablename__ = 'sites'
+
+    id = Column(Integer(), primary_key=True)
+    name = Column(String())
+
+
+class UserSite(Base):
+    """Access control for multisite: Which User has access to which Sites.
+
+    "admins" are special users that have access to all sites. Their access
+    control is handled separately in the platform, circumventing this table.
+    This table is for unprivileged users only.
+    """
+
+    __tablename__ = 'users_sites'
+
+    user_id = Column(Integer(), ForeignKey('users.id'), primary_key=True)
+    site_id = Column(Integer(), ForeignKey('sites.id'), primary_key=True)
 
 
 class SchemaVersion(Base):

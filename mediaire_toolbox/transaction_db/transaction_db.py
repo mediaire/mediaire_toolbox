@@ -1,3 +1,4 @@
+from typing import List
 import logging
 import json
 import threading
@@ -12,7 +13,7 @@ from mediaire_toolbox.constants import (TRANSACTIONS_DB_SCHEMA_NAME,
                                         TRANSACTIONS_DB_SCHEMA_VERSION)
 from mediaire_toolbox.transaction_db.model import (
     Transaction, SchemaVersion, create_all, UserTransaction, User, Role,
-    UserRole, UserPreferences, StudiesMetadata
+    UserRole, UserPreferences, StudiesMetadata, UserSite
 )
 from mediaire_toolbox.transaction_db.exceptions import TransactionDBException
 from mediaire_toolbox.transaction_db import migrations, index
@@ -162,12 +163,14 @@ class TransactionDB:
 
     @t_db_retry
     @lock
-    def create_transaction(
-            self, t: Transaction,
-            user_id=None, product_id=None, analysis_type=None,
-            qa_score=None,
-            processing_state='waiting',
-            task_state='queued') -> int:
+    def create_transaction(self,
+                           t: Transaction,
+                           user_id=None,
+                           product_id=None,
+                           analysis_type=None,
+                           qa_score=None,
+                           processing_state='waiting',
+                           task_state='queued') -> int:
         """will set the provided transaction object as queued,
         add it to the DB and return the transaction id.
 
@@ -722,6 +725,36 @@ class TransactionDB:
                 .filter_by(study_id=study_id).first()
             self.session.commit()
         except Exception:
+            self.session.rollback()
+
+    @t_db_retry
+    def get_user_sites(self, user_id: int):  # TODO -> Query[UserSite]:
+        """Get all sites a user is associated with via `UserSite`s.
+
+        If you want a list, call `.all()` on the returned object, if you want
+        a list of IDs, use
+        `[us.site_id for us in t_db.get_user_sites(user_id)]`.
+        """
+        try:
+            return (self.session
+                    .query(UserSite)
+                    .filter_by(user_id=user_id))
+        finally:
+            self.session.commit()
+
+    @t_db_retry
+    def set_user_sites(self, user_id: int, site_ids: List[int]):
+        """Set the sites a user has a access to.
+
+        This replaces all exisiting associations.
+        """
+        try:
+            self.get_user_sites(user_id).delete()
+            for site_id in site_ids:
+                user_site = UserSite(user_id=user_id, site_id=site_id)
+                self.session.add(user_site)
+            self.session.commit()
+        finally:
             self.session.rollback()
 
     def close(self):

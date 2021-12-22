@@ -17,7 +17,7 @@ from mediaire_toolbox.transaction_db.transaction_db import (TransactionDB,
                                                             utcnow)
 from mediaire_toolbox.transaction_db.model import (
     TaskState, Transaction, UserTransaction, User, Role, UserRole,
-    StudiesMetadata
+    StudiesMetadata, Site, UserSite
 )
 from mediaire_toolbox.transaction_db.exceptions import TransactionDBException
 
@@ -831,3 +831,108 @@ class TestTransactionDB(unittest.TestCase):
     def test_utcnow(self):
         """Checks that `utcnow()` returns aware object in UTC"""
         self.assertEqual(utcnow().tzinfo, timezone.utc)
+
+    def test_site_id(self):
+        """Test that transactions are associated with the correct site."""
+        engine = temp_db.get_temp_db()
+        t_db = TransactionDB(engine)
+
+        tr_default = self._get_test_transaction()
+        t_id_default = t_db.create_transaction(tr_default)
+        tr_default_created = t_db.get_transaction(t_id_default)
+        self.assertEqual(tr_default_created.site_id, tr_default.site_id)
+
+        tr_extra = self._get_test_transaction()
+        tr_extra.site_id = 1
+        t_id_extra = t_db.create_transaction(tr_extra)
+        tr_extra_created = t_db.get_transaction(t_id_extra)
+        self.assertEqual(tr_extra_created.site_id, tr_extra.site_id)
+
+    def test_users_sites(self):
+        """Test that User <-> Site association works."""
+        engine = temp_db.get_temp_db()
+        t_db = TransactionDB(engine)
+
+        user_id = t_db.add_user('RaymondDamian', 'pwd')
+
+        site_default = Site(id=0, name='default')
+        t_db.session.add(site_default)
+
+        site_extra = Site(id=1, name='extra')
+        t_db.session.add(site_extra)
+
+        user_site = UserSite(user_id=user_id, site_id=site_default.id)
+        t_db.session.add(user_site)
+        t_db.session.commit()
+
+        users_sites = t_db.session.query(UserSite)
+        self.assertEqual(len(list(users_sites)), 1)
+        user_site = users_sites.first()
+        self.assertEqual(user_site.user_id, user_id)
+        self.assertEqual(user_site.site_id, site_default.id)
+
+    def test_get_user_sites(self):
+        engine = temp_db.get_temp_db()
+        t_db = TransactionDB(engine)
+        user_id = t_db.add_user('RaymondDamian', 'pwd')
+        desired_site_ids = [0, 1]
+        for site_id in desired_site_ids:
+            site = Site(id=site_id, name='site-{}'.format(site_id))
+            t_db.session.add(site)
+            user_site = UserSite(user_id=user_id, site_id=site_id)
+            t_db.session.add(user_site)
+        t_db.session.commit()
+
+        other_user_id = t_db.add_user('NotRaymond', 'pwd')
+        disallowed_site = Site(id=2, name='site-2')
+        self.assertNotIn(disallowed_site.id, desired_site_ids)
+        t_db.session.add(disallowed_site)
+        other_user_site = UserSite(user_id=other_user_id,
+                                   site_id=disallowed_site.id)
+        t_db.session.add(other_user_site)
+        t_db.session.commit()
+
+        user_sites = t_db.get_user_sites(user_id)
+        user_site_ids = [us.site_id for us in user_sites]
+
+        self.assertCountEqual(user_site_ids, desired_site_ids)
+
+    def test_set_user_sites(self):
+        """Test that setting user's sites works."""
+        engine = temp_db.get_temp_db()
+        t_db = TransactionDB(engine)
+        user_id = t_db.add_user('RaymondDamian', 'pwd')
+        desired_site_ids = [0, 1]
+        for site_id in desired_site_ids:
+            site_default = Site(id=site_id, name='site-{}'.format(site_id))
+            t_db.session.add(site_default)
+        t_db.session.commit()
+
+        t_db.set_user_sites(user_id, desired_site_ids)
+
+        user_sites = t_db.session.query(UserSite)
+        self.assertEqual(len(list(user_sites)), len(desired_site_ids))
+        for user_site in user_sites:
+            self.assertEqual(user_site.user_id, user_id)
+            self.assertIn(user_site.site_id, desired_site_ids)
+
+    def test_set_user_sites_clear_existing(self):
+        """Test that existing user_sites are cleared when setting new ones."""
+        engine = temp_db.get_temp_db()
+        t_db = TransactionDB(engine)
+        user_id = t_db.add_user('RaymondDamian', 'pwd')
+        previous_site_ids = [0, 1]
+        for site_id in previous_site_ids:
+            site = Site(id=site_id, name='site-{}'.format(site_id))
+            t_db.session.add(site)
+            user_site = UserSite(user_id=user_id, site_id=site_id)
+            t_db.session.add(user_site)
+        t_db.session.commit()
+        user_sites = t_db.session.query(UserSite)
+        self.assertEqual(len(list(user_sites)), len(previous_site_ids))
+
+        t_db.set_user_sites(user_id, [])
+
+        user_sites = t_db.get_user_sites(user_id)
+        user_site_ids = [us.site_id for us in user_sites]
+        self.assertEqual(user_site_ids, [])
