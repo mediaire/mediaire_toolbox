@@ -90,6 +90,25 @@ MIGRATIONS = {
         "  FOREIGN KEY (user_id) REFERENCES users(id),"
         "  FOREIGN KEY (site_id) REFERENCES sites(id)"
         ");"
+    ],
+    19: [
+        "ALTER TABLE transactions ADD COLUMN patient_consent_date DATETIME DEFAULT NULL;",
+        ("UPDATE transactions SET"
+         "  patient_consent_date = data_uploaded "
+         "WHERE"
+         "  patient_consent = 1"
+         "  AND data_uploaded IS NOT NULL"
+         ";"),
+        ("UPDATE transactions SET"
+         "  patient_consent_date = datetime(0, 'unixepoch', 'localtime') "
+         "WHERE"
+         "  patient_consent = 1"
+         "  AND data_uploaded IS NULL"
+         ";"),
+        # Aadvanced ALTER TABLE from SQLite 3.35.0 is only available in
+        # SQLAlchemy >= v1.4
+        # https://stackoverflow.com/a/66399224/894166
+        # "ALTER TABLE transactions DROP COLUMN patient_consent;"
     ]
 }
 

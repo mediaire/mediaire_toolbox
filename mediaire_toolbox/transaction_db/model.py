@@ -15,6 +15,28 @@ from mediaire_toolbox import constants
 Base = declarative_base()
 
 
+def utcnow():
+    """Return _aware_ `datetime.now()` object in UTC timezone.
+
+    This function must be used to insert or update `datetime` fields in the
+    database, otherwise the validation `validate_utc` will reject the value.
+    """
+    # From the Python documentation:
+    # https://docs.python.org/3/library/datetime.html#datetime.datetime.utcnow
+    # datetime.utcnow()
+    #   Return the current UTC date and time, with `tzinfo None`.
+    #   This is like `now()`, but returns the current UTC date and time, as a
+    #   naive `datetime` object. An aware current UTC datetime can be obtained
+    #   by calling `datetime.now(timezone.utc)`. See also `now()`.
+    #   Warning:
+    #     Because naive datetime objects are treated by many datetime methods
+    #     as local times, it is preferred to use aware datetimes to represent
+    #     times in UTC. As such, the recommended way to create an object
+    #     representing the current time in UTC is by calling
+    #     `datetime.now(timezone.utc)`.
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
 class TZDateTime(TypeDecorator):
     """A sqlalchemy column type that enforces UTC on datetime objects.
 
@@ -66,8 +88,14 @@ class Transaction(Base):
     # TODO convert this to date
     # study date dicom tag, in string format 'YYYYMMDD'
     study_date = Column(String())
-    # 1 if this transaction has patient consent
-    patient_consent = Column(Integer, default=0)
+    # Date when patient conesent was given. If consent was not given, value
+    # is set to None. A proxy getter `patient_consent` is defined below which
+    # emulates the old boolean interface. For existing rows that did not record
+    # the actual consent date, the `data_uploaded` value is used.
+    # When Transaction is created using `.read_dict()`, if `patient_consent` is
+    # True, `data_uploaded` is used if present, UNIX epoch 0 if it is missing.
+    # Upon _setting_ `patient_consent` manually, the current datetime is used.
+    patient_consent_date = Column(TZDateTime, nullable=True, default=None)
     # institution dicom tag indexed from DICOM header, for free text search
     institution = Column(String())
 
@@ -138,6 +166,23 @@ class Transaction(Base):
     # transactions are dequeued
     priority = Column(Integer, default=0)
 
+    @property
+    def patient_consent(self):
+        """Emulate legacy field superseeded by `patient_consent_date`."""
+        return 1 if self.patient_consent_date is not None else 0
+
+    @patient_consent.setter
+    def patient_consent(self, value):
+        """Emulate legacy field superseeded by `patient_consent_date`.
+
+        If consent is given, set the `patient_consent_date` to the current
+        datetime in UTC. (If the real date of consent is known, one should
+        set `patient_consent_date` directly).
+
+        If consent is revoked, set the `patient_consent_date` to None.
+        """
+        self.patient_consent_date = utcnow() if value else None
+
     @staticmethod
     def _datetime_to_str(dt: Optional[datetime.datetime]):
         return dt.strftime("%Y-%m-%d %H:%M:%S") if dt else None
@@ -160,10 +205,12 @@ class Transaction(Base):
             'study_id': self.study_id,
             'patient_id': self.patient_id,
             'name': self.name,
-            'birth_date': self.birth_date.strftime("%d/%m/%Y")
-            if self.birth_date else None,
+            'birth_date': (self.birth_date.strftime("%d/%m/%Y")
+                           if self.birth_date else None),
             'study_date': self.study_date,
             'patient_consent': self.patient_consent,
+            'patient_consent_date':
+                self._datetime_to_str(self.patient_consent_date),
             'institution': self.institution,
 
             'start_date': self._datetime_to_str(self.start_date),
@@ -203,7 +250,21 @@ class Transaction(Base):
         self.birth_date = datetime.datetime.strptime(
             birth_date, "%d/%m/%Y") if birth_date else None
         self.study_date = d.get('study_date')
-        self.patient_consent = d.get('patient_consent')
+        def _patient_consent_date(d):
+            consent_date = d.get('patient_consent_date')
+            consent_bool = d.get('patient_consent')
+            if consent_date is not None:
+                return self._str_to_datetime(consent_date)
+            elif consent_bool:
+                t0 = datetime.datetime.fromtimestamp(0,
+                                                     tz=datetime.timezone.utc)
+                data_uploaded = d.get('data_uploaded')
+                return (self._str_to_datetime(data_uploaded)
+                        if data_uploaded is not None
+                        else t0)
+            else:
+                return None
+        self.patient_consent_date = _patient_consent_date(d)
         self.institution = d.get('institution')
 
         self.start_date = self._str_to_datetime(d.get('start_date'))

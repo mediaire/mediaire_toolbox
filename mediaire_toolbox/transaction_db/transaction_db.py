@@ -13,7 +13,7 @@ from mediaire_toolbox.constants import (TRANSACTIONS_DB_SCHEMA_NAME,
                                         TRANSACTIONS_DB_SCHEMA_VERSION)
 from mediaire_toolbox.transaction_db.model import (
     Transaction, SchemaVersion, create_all, UserTransaction, User, Role,
-    UserRole, UserPreferences, StudiesMetadata, UserSite
+    UserRole, UserPreferences, StudiesMetadata, UserSite, utcnow
 )
 from mediaire_toolbox.transaction_db.exceptions import TransactionDBException
 from mediaire_toolbox.transaction_db import migrations, index
@@ -95,28 +95,6 @@ def lock(func):
         finally:
             self.lock.release()
     return wrapper
-
-
-def utcnow():
-    """Return _aware_ `datetime.now()` object in UTC timezone.
-
-    This function must be used to insert or update `datetime` fields in the
-    database, otherwise the validation `validate_utc` will reject the value.
-    """
-    # From the Python documentation:
-    # https://docs.python.org/3/library/datetime.html#datetime.datetime.utcnow
-    # datetime.utcnow()
-    #   Return the current UTC date and time, with `tzinfo None`.
-    #   This is like `now()`, but returns the current UTC date and time, as a
-    #   naive `datetime` object. An aware current UTC datetime can be obtained
-    #   by calling `datetime.now(timezone.utc)`. See also `now()`.
-    #   Warning:
-    #     Because naive datetime objects are treated by many datetime methods
-    #     as local times, it is preferred to use aware datetimes to represent
-    #     times in UTC. As such, the recommended way to create an object
-    #     representing the current time in UTC is by calling
-    #     `datetime.now(timezone.utc)`.
-    return datetime.datetime.now(datetime.timezone.utc)
 
 
 class TransactionDB:
@@ -468,11 +446,19 @@ class TransactionDB:
 
     @t_db_retry
     @lock
-    def set_patient_consent(self, id_: int):
-        """Mark this transaction ID with data usage patient consent"""
+    def set_patient_consent(self,
+                            id_: int,
+                            consent_date: datetime.datetime = None):
+        """Mark this transaction ID with data usage patient consent.
+
+        If `consent_date` is given, the
+        `TransactionDBException.patient_consent_date` is set to that value,
+        the current datetime is used otherwise.
+        """
         try:
             t = self._get_transaction_or_raise_exception(id_)
-            t.patient_consent = 1
+            t.patient_consent_date = (consent_date if consent_date is not None
+                                      else utcnow())
             self.session.commit()
         except Exception:
             self.session.rollback()
@@ -484,7 +470,7 @@ class TransactionDB:
         """Mark this transaction ID with NO data usage patient consent"""
         try:
             t = self._get_transaction_or_raise_exception(id_)
-            t.patient_consent = 0
+            t.patient_consent_date = None
             self.session.commit()
         except Exception:
             self.session.rollback()
