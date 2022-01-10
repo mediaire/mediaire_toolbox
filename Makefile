@@ -26,9 +26,10 @@ test:
 		pytest \
 			--color=yes \
 			--cov=$(PROJECT) --cov-fail-under=75 \
-			--numprocesses auto \
 			tests \
-			$(PROJECT)/*.py \
+			$(PROJECT)/*.py
+	# NOTE --numprocesses=auto cannot be used as xdist cannot serialize
+	# datetime objects during distribution?!
 
 lint:
 	docker run $(IMAGE_BASE_NAME):$(IMAGE_TAG) flake8 $(PROJECT)
