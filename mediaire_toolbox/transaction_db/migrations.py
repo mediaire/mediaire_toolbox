@@ -94,7 +94,7 @@ MIGRATIONS = {
     19: [
         "ALTER TABLE transactions ADD COLUMN patient_consent_date DATETIME DEFAULT NULL;",
         ("UPDATE transactions SET"
-         "  patient_consent_date = data_uploaded "
+         "  patient_consent_date = creation_date "
          "WHERE"
          "  patient_consent = 1"
          "  AND data_uploaded IS NOT NULL"
@@ -105,10 +105,6 @@ MIGRATIONS = {
          "  patient_consent = 1"
          "  AND data_uploaded IS NULL"
          ";"),
-        # Aadvanced ALTER TABLE from SQLite 3.35.0 is only available in
-        # SQLAlchemy >= v1.4
-        # https://stackoverflow.com/a/66399224/894166
-        # "ALTER TABLE transactions DROP COLUMN patient_consent;"
     ]
 }
 

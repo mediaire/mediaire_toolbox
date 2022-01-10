@@ -20,6 +20,7 @@ from mediaire_toolbox.transaction_db.model import (
     StudiesMetadata, Site, UserSite
 )
 from mediaire_toolbox.transaction_db.exceptions import TransactionDBException
+from mediaire_toolbox.queue.tasks import Task
 
 from temp_db_base import TempDBFactory
 
@@ -71,7 +72,7 @@ class TestTransactionDB(unittest.TestCase):
         engine = temp_db.get_temp_db()
         t_db = TransactionDB(engine)
         datetime_vars = ['start_date', 'end_date', 'data_uploaded',
-                         'patient_consent_date']
+                         'patient_consent_date', 'creation_date']
         date_vars = ['birth_date']
         t = Transaction()
         test_datetime = datetime(2020, 2, 1, 18, 30, 4, tzinfo=timezone.utc)
@@ -103,27 +104,27 @@ class TestTransactionDB(unittest.TestCase):
 
         with self.subTest(patient_consent=1,
                           patient_consent_date=None,
-                          data_uploaded=None):
+                          creation_date=None):
             t_dict['patient_consent_date'] = None
             t_dict['patient_consent'] = 1
             t_r = Transaction().read_dict(t_dict)
-            #self.assertEqual(t_r.patient_consent, 1)
+            self.assertEqual(t_r.patient_consent, 1)
             self.assertIsNotNone(t_r.patient_consent_date)
 
         now = utcnow().replace(microsecond=0)
         nowstr = datetime.strftime(now, "%Y-%m-%d %H:%M:%S")
         with self.subTest(patient_consent=1,
                           patient_consent_date=None,
-                          data_uploaded=now):
-            t_dict['data_uploaded'] = nowstr
+                          creation_date=now):
+            t_dict['creation_date'] = nowstr
             t_r = Transaction().read_dict(t_dict)
             self.assertEqual(t_r.patient_consent, 1)
             self.assertEqual(t_r.patient_consent_date, now)
 
         with self.subTest(patient_consent=1,
                           patient_consent_date=now,
-                          data_uploaded=None):
-            del t_dict['data_uploaded']
+                          creation_date=None):
+            del t_dict['creation_date']
             t_dict['patient_consent_date'] = nowstr
             t_r = Transaction().read_dict(t_dict)
             self.assertEqual(t_r.patient_consent, 1)
