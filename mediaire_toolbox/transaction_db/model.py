@@ -67,8 +67,88 @@ def validate_utc(key, datetime_obj):
     return datetime_obj
 
 
+class PatientConsentMixin:
+    """Provides synced `patient_consent` (int) and -`_date` columns.
+
+    The `patient_consent_date` is the canonical source of truth.
+    If consent was not given, value is set to None.
+
+    The `patient_consent` column, representing a simple boolean value using an
+    int, is kept for legacy reasons.
+
+    To ensure compatibility with tools that do not use this API, but query the
+    database directly, the column is also preserved. In order to keep both
+    columns in sync, proxy getters and setters are used that update both
+    columns atomically when either one is updated.
+
+    `.to_dict() needs to be updated to export these fields`. `.read_dict()`
+    needs to be updated to use `._read_patient_consent_date()`.
+    """
+    _patient_consent = Column('patient_consent', Integer, default=0)
+    _patient_consent_date = Column('patient_consent_date',
+                                   TZDateTime,
+                                   nullable=True,
+                                   default=None)
+
+    @hybrid_property
+    def patient_consent(self):
+        """Emulate legacy field superseeded by `patient_consent_date`.
+
+        The `paitient_consent_date` field is the only source of truth.
+        """
+        return 1 if self.patient_consent_date is not None else 0
+
+    @patient_consent.setter
+    def patient_consent(self, value):
+        """Emulate legacy field superseeded by `patient_consent_date`.
+
+        Forward to current datetime to `patient_consent_date` setter, which
+        will set both underlying columns.
+        """
+        self.patient_consent_date = utcnow() if value else None
+
+    @hybrid_property
+    def patient_consent_date(self):
+        """Get internal value for `patient_consent_date`."""
+        return self._patient_consent_date
+
+    @patient_consent_date.setter
+    def patient_consent_date(self, value):
+        """Set consent for both legacy `patient_consent` and new
+        `patient_consent_date`.
+
+        If consent is given, set the `patient_consent_date` to the current
+        datetime in UTC. (If the real date of consent is known, one should
+        set `patient_consent_date` directly).
+
+        If consent is revoked, set the `patient_consent_date` to None.
+        """
+        self._patient_consent_date = value
+        self._patient_consent = 1 if value else 0
+
+    def _read_patient_consent_date(self, d: dict):
+        """Read patient_consent information from dict serialization.
+
+        For existing rows that did not record the actual consent date, if
+        `patient_consent` is True, `ceation_date` is used if present,
+        UNIX epoch 0 if it is missing.
+        """
+        consent_date = d.get('patient_consent_date')
+        consent_bool = d.get('patient_consent')
+        if consent_date is not None:
+            return self._str_to_datetime(consent_date)
+        elif consent_bool:
+            t0 = datetime.datetime.fromtimestamp(0, tz=datetime.timezone.utc)
+            creation_date = d.get('creation_date')
+            return (self._str_to_datetime(creation_date)
+                    if creation_date is not None
+                    else t0)
+        else:
+            return None
+
+
 # TODO Change to a dataclass when moving to Python 3.7
-class Transaction(Base):
+class Transaction(Base, PatientConsentMixin):
 
     __tablename__ = 'transactions'
 
@@ -89,18 +169,7 @@ class Transaction(Base):
     # TODO convert this to date
     # study date dicom tag, in string format 'YYYYMMDD'
     study_date = Column(String())
-    # Date when patient conesent was given. If consent was not given, value
-    # is set to None. A proxy getter `patient_consent` is defined below which
-    # emulates the old boolean interface. For existing rows that did not record
-    # the actual consent date, the `data_uploaded` value is used.
-    # When Transaction is created using `.read_dict()`, if `patient_consent` is
-    # True, `data_uploaded` is used if present, UNIX epoch 0 if it is missing.
-    # Upon _setting_ `patient_consent` manually, the current datetime is used.
-    _patient_consent = Column('patient_consent', Integer, default=0)
-    _patient_consent_date = Column('patient_consent_date',
-                                   TZDateTime,
-                                   nullable=True,
-                                   default=None)
+    # NOTE patient_consent, patient_consent_date via PatientConsentMixin
     # institution dicom tag indexed from DICOM header, for free text search
     institution = Column(String())
 
@@ -171,42 +240,6 @@ class Transaction(Base):
     # transactions are dequeued
     priority = Column(Integer, default=0)
 
-    @hybrid_property
-    def patient_consent(self):
-        """Emulate legacy field superseeded by `patient_consent_date`.
-
-        The `paitient_consent_date` field is the only source of truth.
-        """
-        return 1 if self.patient_consent_date is not None else 0
-
-    @patient_consent.setter
-    def patient_consent(self, value):
-        """Emulate legacy field superseeded by `patient_consent_date`.
-
-        Forward to `patient_consent_date` setter, which will set both
-        underlying columns.
-        """
-        self.patient_consent_date = utcnow() if value else None
-
-    @hybrid_property
-    def patient_consent_date(self):
-        """Get internal value for `patient_consent_date`."""
-        return self._patient_consent_date
-
-    @patient_consent_date.setter
-    def patient_consent_date(self, value):
-        """Set consent for both legacy `patient_consent` and new
-        `patient_consent_date`.
-
-        If consent is given, set the `patient_consent_date` to the current
-        datetime in UTC. (If the real date of consent is known, one should
-        set `patient_consent_date` directly).
-
-        If consent is revoked, set the `patient_consent_date` to None.
-        """
-        self._patient_consent_date = value
-        self._patient_consent = 1 if value else 0
-
     @staticmethod
     def _datetime_to_str(dt: Optional[datetime.datetime]):
         return dt.strftime("%Y-%m-%d %H:%M:%S") if dt else None
@@ -274,21 +307,7 @@ class Transaction(Base):
         self.birth_date = datetime.datetime.strptime(
             birth_date, "%d/%m/%Y") if birth_date else None
         self.study_date = d.get('study_date')
-        def _patient_consent_date(d):
-            consent_date = d.get('patient_consent_date')
-            consent_bool = d.get('patient_consent')
-            if consent_date is not None:
-                return self._str_to_datetime(consent_date)
-            elif consent_bool:
-                t0 = datetime.datetime.fromtimestamp(0,
-                                                     tz=datetime.timezone.utc)
-                creation_date = d.get('creation_date')
-                return (self._str_to_datetime(creation_date)
-                        if creation_date is not None
-                        else t0)
-            else:
-                return None
-        self.patient_consent_date = _patient_consent_date(d)
+        self.patient_consent_date = self._read_patient_consent_date(d)
         self.institution = d.get('institution')
 
         self.start_date = self._str_to_datetime(d.get('start_date'))
