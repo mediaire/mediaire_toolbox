@@ -98,6 +98,11 @@ class PatientConsentMixin:
         """
         return 1 if self.patient_consent_date is not None else 0
 
+    @patient_consent.expression
+    def patient_consent(self):
+        """To use in Query expressions, define SQL expression separately."""
+        return self.patient_consent_date != None  # noqa: E711
+
     @patient_consent.setter
     def patient_consent(self, value):
         """Emulate legacy field superseeded by `patient_consent_date`.

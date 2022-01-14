@@ -20,7 +20,6 @@ from mediaire_toolbox.transaction_db.model import (
     StudiesMetadata, Site, UserSite
 )
 from mediaire_toolbox.transaction_db.exceptions import TransactionDBException
-from mediaire_toolbox.queue.tasks import Task
 
 from temp_db_base import TempDBFactory
 
@@ -129,7 +128,6 @@ class TestTransactionDB(unittest.TestCase):
             t_r = Transaction().read_dict(t_dict)
             self.assertEqual(t_r.patient_consent, 1)
             self.assertEqual(t_r.patient_consent_date, now)
-
 
     def test_read_transaction_from_dict_is_complete(self):
         """get all variables of transaction except non generic types
@@ -599,7 +597,6 @@ class TestTransactionDB(unittest.TestCase):
             self.assertEqual(0, t.patient_consent)
         t_db.close()
 
-
     def test_set_patient_consent_date(self):
         """Test that `patient_consent_date` can be set."""
         engine = temp_db.get_temp_db()
@@ -675,6 +672,48 @@ class TestTransactionDB(unittest.TestCase):
         self.assertEqual(2, t.priority)
 
         t_db.close()
+
+    def test_patient_consent_hybrid_property_filter(self):
+        """Test that filtering by hybrid properties works."""
+        engine = temp_db.get_temp_db()
+        t_db = TransactionDB(engine)
+
+        tr_no = self._get_test_transaction()
+        t_id_no = t_db.create_transaction(tr_no)
+        t_no = t_db.get_transaction(t_id_no)
+        self.assertEqual(t_no.patient_consent, 0)
+        self.assertIsNone(t_no.patient_consent_date)
+
+        tr_yes = self._get_test_transaction()
+        tr_yes.patient_consent = 1
+        t_id_yes = t_db.create_transaction(tr_yes)
+        t_yes = t_db.get_transaction(t_id_yes)
+        self.assertEqual(t_yes.patient_consent, 1)
+        self.assertIsNotNone(t_yes.patient_consent_date)
+
+        with self.subTest(patient_consent=1):
+            ts = (t_db.session
+                  .query(Transaction)
+                  .filter(Transaction.patient_consent == 1))
+            self.assertCountEqual(list(ts), [t_yes])
+
+        with self.subTest(patient_consent=0):
+            ts = (t_db.session
+                  .query(Transaction)
+                  .filter(Transaction.patient_consent == 0))
+            self.assertCountEqual(list(ts), [t_no])
+
+        with self.subTest(patient_consent_date=' != None'):
+            ts = (t_db.session
+                  .query(Transaction)
+                  .filter(Transaction.patient_consent_date != None))  # noqa: E711,E501
+            self.assertCountEqual(list(ts), [t_yes])
+
+        with self.subTest(patient_consent_date=None):
+            ts = (t_db.session
+                  .query(Transaction)
+                  .filter(Transaction.patient_consent_date == None))  # noqa: E711,E501
+            self.assertCountEqual(list(ts), [t_no])
 
     def test_add_user_ok(self):
         """test that we can add User entity"""
