@@ -82,10 +82,8 @@ class TestTransactionDB(unittest.TestCase):
         t_r = Transaction().read_dict(t.to_dict())
         t_id = t_db.create_transaction(t_r)
         t_r_from_db = t_db.get_transaction(t_id)
-        self.assertEqual(test_datetime.replace(tzinfo=None),
-                         t_r_from_db.start_date)
-        self.assertEqual(test_datetime.replace(tzinfo=None),
-                         t_r_from_db.end_date)
+        self.assertEqual(test_datetime, t_r_from_db.start_date)
+        self.assertEqual(test_datetime, t_r_from_db.end_date)
         self.assertEqual(date(2020, 2, 1), t_r_from_db.birth_date)
 
     def test_read_dict_task_state(self):

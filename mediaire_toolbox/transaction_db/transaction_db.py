@@ -101,7 +101,7 @@ def utcnow():
     """Return _aware_ `datetime.now()` object in UTC timezone.
 
     This function must be used to insert or update `datetime` fields in the
-    database, otherwise the validation `validate_utc` will reject the value.
+    database, otherwise the `TZDateTime` TypeDecorator will reject the value.
     """
     # From the Python documentation:
     # https://docs.python.org/3/library/datetime.html#datetime.datetime.utcnow
