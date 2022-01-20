@@ -62,7 +62,7 @@ MIGRATIONS = {
     ],
     17: [
         "CREATE TABLE IF NOT EXISTS sites (id INT PRIMARY KEY, name TEXT);",
-        "INSERT OR IGNORE INTO sites (id, name) VALUES (0, 'default');",
+        "INSERT INTO sites (id, name) SELECT 0, 'default' WHERE NOT EXISTS (SELECT * FROM sites WHERE id = 0);",
         # FOREIGN KEY column would need to be created via temporary table due
         # to sqlite's limited ALTER TABLE support: www.sqlite.org/faq.html#q11
         # so instead of doing a massive migration, we just ignore the formal
