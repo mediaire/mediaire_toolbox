@@ -525,43 +525,46 @@ def main():
     parser = argparse.ArgumentParser(
         description='clean folder')
     parser.add_argument('--folder', nargs='?', const=1, type=str,
+                        default='/src/shared_data/dicoms',
                         help='root folder to be cleaned')
-    parser.add_argument('--folder_size_soft', nargs='?', const=1, type=int,
-                        default=-1, help='allowed folder size soft limit')
-    parser.add_argument('--folder_size_hard', nargs='?', const=1, type=int,
-                        default=-1, help='allowed folder size hard limit')
+    parser.add_argument('--folder_size_soft_limit', nargs='?', const=1,
+                        type=int, default=983040,
+                        help='allowed folder size soft limit')
+    parser.add_argument('--folder_size_hard_limit', nargs='?', const=1,
+                        type=int, default=1228800,
+                        help='allowed folder size hard limit')
     parser.add_argument('--max_data_seconds', nargs='?', const=1, type=int,
                         default=-1, help='maximum allowed folder age')
     parser.add_argument('--whitelist', type=str, nargs='?',
                         help='whitelist pathname')
     parser.add_argument('--blacklist', type=str, nargs='?',
                         help='blacklist pathname')
-    parser.add_argument('--prioritylist', type=str, nargs='?',
-                        help='prioritylist pathname')
+    parser.add_argument(
+        '--priority_list', type=str, nargs='?',
+        default="['*/spm_result/*.dcm','*.nii','*.dcm','*.nii.gz']",
+        help='priority_list pathname')
     parser.add_argument('--dry_run', action="store_true", default=False)
-
     args = parser.parse_args()
-    dry_run = args.dry_run
 
     basic_logging_conf()
 
     filter_path = args.blacklist or args.whitelist
     if filter_path:
         filter_list = read_path(filter_path)
-    priority_path = args.prioritylist
+    priority_path = args.priority_list
     if priority_path:
         priority_list = read_path(priority_path)
     data_cleaner = DataCleaner(args.folder,
-                               args.max_folder_size_soft,
-                               args.max_folder_size_hard,
+                               args.folder_size_soft_limit,
+                               args.folder_size_hard_limit,
                                args.max_data_seconds,
                                whitelist=(filter_list
                                           if args.whitelist else None),
                                blacklist=(filter_list
                                           if args.blacklist else None),
                                priority_list=(priority_list
-                                              if args.priority_path else None))
-    data_cleaner.clean_up(dry_run=dry_run)
+                                              if priority_path else None))
+    data_cleaner.clean_up(dry_run=args.dry_run)
 
 
 if __name__ == "__main__":
