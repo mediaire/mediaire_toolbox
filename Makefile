@@ -22,7 +22,14 @@ shell:
 	docker run -it $(IMAGE_BASE_NAME):$(IMAGE_TAG) sh
 
 test:
-	docker run $(IMAGE_BASE_NAME):$(IMAGE_TAG) nosetests --with-coverage --cover-package=$(PROJECT) --cover-min-percentage=75 tests $(PROJECT)/*.py
+	docker run $(IMAGE_BASE_NAME):$(IMAGE_TAG) \
+		pytest \
+			--color=yes \
+			--cov=$(PROJECT) --cov-fail-under=75 \
+			tests \
+			$(PROJECT)/*.py
+	# NOTE --numprocesses=auto cannot be used as xdist cannot serialize
+	# datetime objects during distribution?!
 
 lint:
 	docker run $(IMAGE_BASE_NAME):$(IMAGE_TAG) flake8 $(PROJECT)

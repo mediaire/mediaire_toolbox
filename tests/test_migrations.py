@@ -4,6 +4,7 @@ import tempfile
 import shutil
 import json
 import os
+from datetime import datetime, timezone
 
 from sqlalchemy import create_engine
 from sqlalchemy.schema import MetaData
@@ -12,6 +13,7 @@ from mediaire_toolbox.transaction_db import migrations
 from mediaire_toolbox.transaction_db.transaction_db import (
     TransactionDB,
     get_transaction_model,
+    utcnow
 )
 from mediaire_toolbox.transaction_db.model import Transaction
 
@@ -146,7 +148,7 @@ class TestMigration(unittest.TestCase):
         t_db.close()
 
     def test_migrate_analysis_type(self):
-        engine = self._get_temp_db(5)
+        engine = self._get_temp_db(6)
         t_db = TransactionDB(engine)
         last_message = {'data': {'report_pdf_paths': {'mdbrain_nd': 'path1'}}}
         tr_1 = Transaction()
@@ -166,7 +168,7 @@ class TestMigration(unittest.TestCase):
         t_db.close()
 
     def test_migrate_analysis_type_2(self):
-        engine = self._get_temp_db(5)
+        engine = self._get_temp_db(7)
         t_db = TransactionDB(engine)
         last_message = {
             'data': {
@@ -190,7 +192,7 @@ class TestMigration(unittest.TestCase):
         t_db.close()
 
     def test_migrate_report_qa(self):
-        engine = self._get_temp_db(5)
+        engine = self._get_temp_db(8)
         t_db = TransactionDB(engine)
         last_message = {
             'data': {'report_qa_score_outcomes': {'mdbrain_nd': 'good'}}}
@@ -211,7 +213,7 @@ class TestMigration(unittest.TestCase):
         t_db.close()
 
     def test_migrate_report_qa_2(self):
-        engine = self._get_temp_db(5)
+        engine = self._get_temp_db(9)
         t_db = TransactionDB(engine)
         last_message = {
             'data': {
@@ -303,3 +305,71 @@ class TestMigration(unittest.TestCase):
                             for e in meta.tables['users_sites'].foreign_keys]
             for foreign_key in ['users.id', 'sites.id']
         ))
+
+    def test_migrations_patient_consent_date(self):
+        """Test that patient_consent_date is migrated correctly."""
+        engine = self._get_temp_db(10)
+        t_db = TransactionDB(engine)
+        # TODO is this a problem?
+        # TZDateTime apparently does not re-serialize microsceconds correctly
+        now = utcnow().replace(microsecond=0)
+
+        t = Transaction()
+        t.patient_consent = 0
+        t_id_no_consent = t_db.create_transaction(t)
+
+        t = Transaction()
+        t.patient_consent = 1
+        t.data_uploaded = now
+        t_id_date_uploaded = t_db.create_transaction(t)
+
+        # TODO bcause the setter is overwritten in the new version, the legacy
+        # field cannot be set and tested
+        t = Transaction()
+        t.patient_consent = 1
+        t.data_uploaded = None
+        t_id_no_uploaded = t_db.create_transaction(t)
+
+        model = get_transaction_model(engine)
+        migrations.migrate_institution(t_db.session, model)
+        t_db.session.commit()
+
+        with self.subTest(patient_consent=0, data_uploaded=None):
+            ret_date = \
+                t_db.get_transaction(t_id_no_consent).patient_consent_date
+            self.assertIsNone(ret_date)
+
+        with self.subTest(patient_consent=1, data_uploaded=now):
+            ret_date = \
+                t_db.get_transaction(t_id_date_uploaded).patient_consent_date
+            self.assertEqual(ret_date.replace(microsecond=0), now)  # TODO
+
+        # TODO bcause the setter is overwritten in the new version, the legacy
+        # field cannot be set and tested
+        # with self.subTest(patient_consent=1, data_uploaded=None):
+        #     ret_date = \
+        #         t_db.get_transaction(t_id_no_uploaded).patient_consent_date
+        #     self.assertEqual(ret_date,
+        #                      datetime.fromtimestamp(0, tz=timezone.utc))
+
+
+    # Aadvanced ALTER TABLE from SQLite 3.35.0 is only available in
+    # SQLAlchemy >= v1.4, so dropping the column was disabled in the migration
+    @unittest.expectedFailure
+    def test_migrations_patient_consent_removed(self):
+        """Test that patient_consent field is not present anymore."""
+        temp_folder = \
+            tempfile.mkdtemp(suffix='_test_migrations_patient_consent_removed')
+        self.addCleanup(shutil.rmtree, temp_folder)
+        temp_db_path = os.path.join(temp_folder, 't_v1.db')
+        shutil.copy('tests/fixtures/t_v1.db', temp_db_path)
+        engine = create_engine('sqlite:///' + temp_db_path)
+
+        t_db = TransactionDB(engine,
+                             create_db=True,
+                             db_file_path=temp_db_path)
+
+        # https://stackoverflow.com/a/69653223/894166
+        columns = \
+            t.db.session.query(Transaction).limit(1).statement.columns.keys()
+        self.assertNotIn('patient_consent', columns)

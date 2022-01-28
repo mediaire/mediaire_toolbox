@@ -6,7 +6,7 @@ import os
 import types
 import sys
 import traceback
-from datetime import datetime, date, timezone
+from datetime import datetime, date, timezone, timedelta
 
 from sqlite3 import OperationalError as Sqlite3OperationalError
 from sqlalchemy import create_engine
@@ -70,7 +70,8 @@ class TestTransactionDB(unittest.TestCase):
         # test that date and datetimes are parsed correctly
         engine = temp_db.get_temp_db()
         t_db = TransactionDB(engine)
-        datetime_vars = ['start_date', 'end_date', 'data_uploaded']
+        datetime_vars = ['start_date', 'end_date', 'data_uploaded',
+                         'patient_consent_date', 'creation_date']
         date_vars = ['birth_date']
         t = Transaction()
         test_datetime = datetime(2020, 2, 1, 18, 30, 4, tzinfo=timezone.utc)
@@ -93,13 +94,48 @@ class TestTransactionDB(unittest.TestCase):
         t_r = Transaction().read_dict(t.to_dict())
         self.assertEqual(TaskState.completed, t_r.task_state)
 
+    def test_read_dict_patient_consent(self):
+        """Test that legacy patient_consent is parsed correctly."""
+        t = Transaction()
+        t_dict = t.to_dict()
+
+        with self.subTest(patient_consent=1,
+                          patient_consent_date=None,
+                          creation_date=None):
+            t_dict['patient_consent_date'] = None
+            t_dict['patient_consent'] = 1
+            t_r = Transaction().read_dict(t_dict)
+            self.assertEqual(t_r.patient_consent, 1)
+            self.assertIsNotNone(t_r.patient_consent_date)
+
+        now = utcnow().replace(microsecond=0)
+        nowstr = datetime.strftime(now, "%Y-%m-%d %H:%M:%S")
+        with self.subTest(patient_consent=1,
+                          patient_consent_date=None,
+                          creation_date=now):
+            t_dict['creation_date'] = nowstr
+            t_r = Transaction().read_dict(t_dict)
+            self.assertEqual(t_r.patient_consent, 1)
+            self.assertEqual(t_r.patient_consent_date, now)
+
+        with self.subTest(patient_consent=1,
+                          patient_consent_date=now,
+                          creation_date=None):
+            del t_dict['creation_date']
+            t_dict['patient_consent_date'] = nowstr
+            t_r = Transaction().read_dict(t_dict)
+            self.assertEqual(t_r.patient_consent, 1)
+            self.assertEqual(t_r.patient_consent_date, now)
+
     def test_read_transaction_from_dict_is_complete(self):
-        # get all variables of transaction except non generic types
-        # Test that these variables are read from the deserialization
-        # function
+        """get all variables of transaction except non generic types
+
+        Test that these variables are read from the deserialization function.
+        """
         non_generic_vars = [
             'start_date', 'end_date', 'birth_date', 'task_state',
-            'data_uploaded', 'creation_date']
+            'data_uploaded', 'creation_date', 'patient_consent',
+            'patient_consent_date']
         CALLABLES = types.FunctionType, types.MethodType
         var = [
             key for key, value in Transaction.__dict__.items()
@@ -119,7 +155,8 @@ class TestTransactionDB(unittest.TestCase):
         counter = 0
         for key in var:
             counter += 1
-            self.assertEqual(counter, getattr(t2, key))
+            with self.subTest(key=key):
+                self.assertEqual(counter, getattr(t2, key))
 
     def test_create_transaction_index_sequences(self):
         engine = temp_db.get_temp_db()
@@ -544,14 +581,51 @@ class TestTransactionDB(unittest.TestCase):
         t_id = t_db.create_transaction(tr_1)
         t = t_db.get_transaction(t_id)
         self.assertEqual(0, t.patient_consent)
+
         # set patient consent
-        t_db.set_patient_consent(t_id)
-        t = t_db.get_transaction(t_id)
-        self.assertEqual(1, t.patient_consent)
+        with self.subTest(consent=True):
+            t_db.set_patient_consent(t_id)
+            t = t_db.get_transaction(t_id)
+            self.assertEqual(1, t.patient_consent)
+
         # unset patient consent
-        t_db.unset_patient_consent(t_id)
+        with self.subTest(consent=True):
+            t_db.unset_patient_consent(t_id)
+            t = t_db.get_transaction(t_id)
+            self.assertEqual(0, t.patient_consent)
+        t_db.close()
+
+    def test_set_patient_consent_date(self):
+        """Test that `patient_consent_date` can be set."""
+        engine = temp_db.get_temp_db()
+        t_db = TransactionDB(engine)
+        t_id = t_db.create_transaction(self._get_test_transaction())
         t = t_db.get_transaction(t_id)
         self.assertEqual(0, t.patient_consent)
+
+        # set patient consent
+        with self.subTest(consent=True, consent_date=None):
+            t_db.set_patient_consent(t_id)
+            t = t_db.get_transaction(t_id)
+            self.assertEqual(1, t.patient_consent)
+            self.assertLess(t.patient_consent_date - utcnow(),
+                            timedelta(seconds=1))
+
+        # unset patient consent
+        with self.subTest(consent=False, consent_date=None):
+            t_db.unset_patient_consent(t_id)
+            t = t_db.get_transaction(t_id)
+            self.assertEqual(0, t.patient_consent)
+            self.assertIsNone(t.patient_consent_date)
+
+        # set patient consent to specific date
+        with self.subTest(consent=True, consent_date=None):
+            now = utcnow()
+            t_db.set_patient_consent(t_id, now)
+            t = t_db.get_transaction(t_id)
+            self.assertEqual(1, t.patient_consent)
+            self.assertEqual(t.patient_consent_date, now)
+
         t_db.close()
 
     def test_set_qa_score(self):
@@ -596,6 +670,48 @@ class TestTransactionDB(unittest.TestCase):
         self.assertEqual(2, t.priority)
 
         t_db.close()
+
+    def test_patient_consent_hybrid_property_filter(self):
+        """Test that filtering by hybrid properties works."""
+        engine = temp_db.get_temp_db()
+        t_db = TransactionDB(engine)
+
+        tr_no = self._get_test_transaction()
+        t_id_no = t_db.create_transaction(tr_no)
+        t_no = t_db.get_transaction(t_id_no)
+        self.assertEqual(t_no.patient_consent, 0)
+        self.assertIsNone(t_no.patient_consent_date)
+
+        tr_yes = self._get_test_transaction()
+        tr_yes.patient_consent = 1
+        t_id_yes = t_db.create_transaction(tr_yes)
+        t_yes = t_db.get_transaction(t_id_yes)
+        self.assertEqual(t_yes.patient_consent, 1)
+        self.assertIsNotNone(t_yes.patient_consent_date)
+
+        with self.subTest(patient_consent=1):
+            ts = (t_db.session
+                  .query(Transaction)
+                  .filter(Transaction.patient_consent == 1))
+            self.assertCountEqual(list(ts), [t_yes])
+
+        with self.subTest(patient_consent=0):
+            ts = (t_db.session
+                  .query(Transaction)
+                  .filter(Transaction.patient_consent == 0))
+            self.assertCountEqual(list(ts), [t_no])
+
+        with self.subTest(patient_consent_date=' != None'):
+            ts = (t_db.session
+                  .query(Transaction)
+                  .filter(Transaction.patient_consent_date != None))  # noqa: E711,E501
+            self.assertCountEqual(list(ts), [t_yes])
+
+        with self.subTest(patient_consent_date=None):
+            ts = (t_db.session
+                  .query(Transaction)
+                  .filter(Transaction.patient_consent_date == None))  # noqa: E711,E501
+            self.assertCountEqual(list(ts), [t_no])
 
     def test_add_user_ok(self):
         """test that we can add User entity"""

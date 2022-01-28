@@ -90,6 +90,21 @@ MIGRATIONS = {
         "  FOREIGN KEY (user_id) REFERENCES users(id),"
         "  FOREIGN KEY (site_id) REFERENCES sites(id)"
         ");"
+    ],
+    19: [
+        "ALTER TABLE transactions ADD COLUMN patient_consent_date DATETIME DEFAULT NULL;",
+        ("UPDATE transactions SET"
+         "  patient_consent_date = creation_date "
+         "WHERE"
+         "  patient_consent = 1"
+         "  AND creation_date IS NOT NULL"
+         ";"),
+        ("UPDATE transactions SET"
+         "  patient_consent_date = datetime(0, 'unixepoch', 'localtime') "
+         "WHERE"
+         "  patient_consent = 1"
+         "  AND creation_date IS NULL"
+         ";"),
     ]
 }
 
