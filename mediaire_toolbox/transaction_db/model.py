@@ -7,7 +7,6 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.ext.hybrid import hybrid_property
-from sqlalchemy.orm import validates
 from passlib.apps import custom_app_context as pwd_context
 
 from mediaire_toolbox.task_state import TaskState
@@ -57,14 +56,6 @@ class TZDateTime(TypeDecorator):
         if value is not None:
             value = value.replace(tzinfo=datetime.timezone.utc)
         return value
-
-
-# TODO replace with using TZDateTime type decorator
-def validate_utc(key, datetime_obj):
-    """Only accepts `datetime_obj` in UTC or `None` for `key`."""
-    if datetime_obj and datetime_obj.tzinfo != datetime.timezone.utc:
-        raise ValueError("{} only accepts UTC values".format(key))
-    return datetime_obj
 
 
 class PatientConsentMixin:
@@ -180,12 +171,12 @@ class Transaction(Base, PatientConsentMixin):
 
     # Datetime when the transaction moved to 'processing' state for
     # the first time
-    start_date = Column(DateTime())
+    start_date = Column(TZDateTime)
     # Datetime when the transaction moved to 'completed' state for
     # the first time
-    end_date = Column(DateTime())
+    end_date = Column(TZDateTime)
     # Datetime when the transaction was created
-    creation_date = Column(DateTime())
+    creation_date = Column(TZDateTime)
 
     # transaction types
     # mdbrain version
@@ -238,7 +229,7 @@ class Transaction(Base, PatientConsentMixin):
 
     # misc
     # DateTime when transaction data was exported to client api
-    data_uploaded = Column(DateTime())
+    data_uploaded = Column(TZDateTime)
     # Transaction should be billed if empty
     billable = Column(String())
     # priority -> integer number that can affect the order in which
@@ -256,10 +247,6 @@ class Transaction(Base, PatientConsentMixin):
             return dt.replace(tzinfo=datetime.timezone.utc)
         else:
             return None
-
-    @validates('start_date', 'end_date', 'creation_date', 'data_uploaded')
-    def validate_utc(self, key, datetime_obj):
-        return validate_utc(key, datetime_obj)
 
     def to_dict(self):
         return {
@@ -361,11 +348,7 @@ class StudiesMetadata(Base):
     # dicom_grazer, longitudinal_grazer, ...
     origin = Column(String(255))
     # if auto_pull
-    c_move_time = Column(DateTime())
-
-    @validates('c_move_time')
-    def validate_utc(self, key, datetime_obj):
-        return validate_utc(key, datetime_obj)
+    c_move_time = Column(TZDateTime)
 
     def to_dict(self):
         return {'study_id': self.study_id,
@@ -385,13 +368,11 @@ class User(Base):
     hashed_password = Column(String(128))
     # Datetime the user was added
     added = Column(
-        DateTime(),
+        TZDateTime,
+        # mediaire_toolbox.transaction_db.transaction_db.utcnow, but importing
+        # from there would create circular dependency
         default=lambda: datetime.datetime.now(datetime.timezone.utc)
     )
-
-    @validates('added')
-    def validate_utc(self, key, datetime_obj):
-        return validate_utc(key, datetime_obj)
 
     @staticmethod
     def password_hash(password):
