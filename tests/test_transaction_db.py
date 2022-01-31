@@ -1050,3 +1050,19 @@ class TestTransactionDB(unittest.TestCase):
         user_sites = t_db.get_user_sites(user_id)
         user_site_ids = [us.site_id for us in user_sites]
         self.assertEqual(user_site_ids, [])
+
+    def test_TZDateTime_LIKE(self):
+        """Test that type coersion works for LIKE comparison on TZDateTime."""
+        engine = temp_db.get_temp_db()
+        t_db = TransactionDB(engine)
+
+        t_id = t_db.create_transaction(Transaction(
+            start_date=datetime(2020, 1, 1, tzinfo=timezone.utc)
+        ))
+
+        t_retr = (t_db.session
+                  .query(Transaction)
+                  .filter(Transaction.start_date.like("%2020%"))
+                  .one())
+
+        self.assertEqual(t_retr.transaction_id, t_id)

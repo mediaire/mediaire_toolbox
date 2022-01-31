@@ -5,6 +5,7 @@ from sqlalchemy import (
     Column, Integer, String, Sequence, DateTime, Date, Enum, ForeignKey,
     TypeDecorator
 )
+from sqlalchemy.sql import operators
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.ext.hybrid import hybrid_property
 from passlib.apps import custom_app_context as pwd_context
@@ -43,6 +44,32 @@ class TZDateTime(TypeDecorator):
     Source: https://docs.sqlalchemy.org/en/12/core/custom_types.html#store-timezone-aware-timestamps-as-timezone-naive-utc
     """  # noqa: E501
     impl = DateTime
+
+    def coerce_compared_value(self, op, value):  # noqa: D
+        # In the platform's fulltext search function, one wants to enable
+        # searching for dates as well.
+        #
+        #     Transaction.study_date.like(query_string)
+        #                 ~~~~~~~~~~      ~~~~~~~~~~~~
+        #                 ^ db_val        ^ compare_val
+        #
+        # By default, SQLAlchmy coerces the `compare_val` to the type of
+        # `db_val`! Since the type of `compare_val` is `str` and not
+        # `datetime.datetime`, `process_bind_param` called during the attempt
+        # for type coercion, will fail with
+        #
+        #     AttributeError: 'str' object has no attribute 'tzinfo'
+        #
+        # For a search operator like `LIKE`, we actually want to compare
+        # the underlying string representation of the TZDateTime type.
+        # Therefore we must advice SQLAlchmy to coerce the type of `db_val`
+        # to `str` in that case.
+        #
+        # https://docs.sqlalchemy.org/en/14/core/custom_types.html#dealing-with-comparison-operations  # noqa: E501
+        if op in (operators.like_op, operators.notlike_op):
+            return String()
+        else:
+            return self
 
     def process_bind_param(self, value, dialect):  # noqa: D
         if value is not None:
