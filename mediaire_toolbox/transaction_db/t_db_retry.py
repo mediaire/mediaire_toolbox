@@ -1,10 +1,8 @@
 import logging
 
-from tenacity.retry import retry_if_exception_type
+from tenacity.retry import retry_if_exception
 from tenacity import retry, stop_after_attempt, wait_fixed
 
-from sqlite3 import OperationalError as Sqlite3OperationalError
-from sqlalchemy.exc import OperationalError
 
 from mediaire_toolbox.constants import (
     RETRY_DATABASE_OP_SECONDS,
@@ -28,11 +26,17 @@ def before_sleep_log(retry_state):
                 retry_state.outcome))
 
 
+def is_operational_error(e):
+    return (
+        'OperationalError' in str(e) or
+        'OperationalError' in e.__class__.__name__
+    )
+
+
 def t_db_retry(f):
     return retry(
         retry=(
-            retry_if_exception_type(OperationalError)
-            | retry_if_exception_type(Sqlite3OperationalError)),
+            retry_if_exception(is_operational_error)),
         stop=stop_after_attempt(RETRY_DATABASE_OP_TIMES),
         wait=wait_fixed(RETRY_DATABASE_OP_SECONDS),
         before_sleep=before_sleep_log)(f)
